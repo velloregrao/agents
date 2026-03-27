@@ -95,7 +95,7 @@ async function runResearch(ticker: string, request: string = ""): Promise<string
 }
 
 // ── Parse intent from user message ───────────────────────────────────────────
-function parseIntent(text: string): { intent: string; tickers: string[]; raw: string } {
+export function parseIntent(text: string): { intent: string; tickers: string[]; raw: string } {
   const upper = text.toUpperCase();
   const skipWords = new Set([
     "ANALYZE", "ANALYSIS", "STOCK", "SHARE", "PRICE", "GET", "SHOW",
@@ -108,11 +108,11 @@ function parseIntent(text: string): { intent: string; tickers: string[]; raw: st
   const words   = upper.replace(/[^A-Z\s]/g, "").split(/\s+/);
   const tickers = words.filter(w => w.length >= 1 && w.length <= 5 && !skipWords.has(w));
 
-  if (/^(hi|hello|hey|help)$/i.test(text.trim()))          return { intent: "help",      tickers: [],     raw: text };
-  if (/portfolio|positions|holdings/i.test(text))           return { intent: "portfolio", tickers,         raw: text };
-  if (/performance|stats|statistics|pnl|profit/i.test(text)) return { intent: "portfolio", tickers,       raw: text };
-  if (/reflect|reflection|lessons|learn/i.test(text))       return { intent: "reflect",   tickers: [],     raw: text };
+  if (/^(hi|hello|hey|help)$/i.test(text.trim()))            return { intent: "help",      tickers: [],     raw: text };
   if (/monitor|check positions|review positions/i.test(text)) return { intent: "monitor", tickers: [],    raw: text };
+  if (/portfolio|positions|holdings/i.test(text))             return { intent: "portfolio", tickers,       raw: text };
+  if (/performance|stats|statistics|pnl|profit/i.test(text))  return { intent: "portfolio", tickers,      raw: text };
+  if (/reflect|reflection|lessons|learn/i.test(text))         return { intent: "reflect",   tickers: [],   raw: text };
   if (/research|deep.?dive|full.?analysis|recommend/i.test(text) && tickers.length > 0)
                                                              return { intent: "research",  tickers,         raw: text };
   if (/trade|buy|sell|invest|run agent/i.test(text) && tickers.length > 0)

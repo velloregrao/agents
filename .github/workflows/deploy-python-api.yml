@@ -15,6 +15,18 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies and run tests
+        working-directory: stock-analysis-agent
+        run: |
+          pip install uv
+          uv pip install --system -e ".[test]"
+          pytest tests/unit tests/functional -v
+
       - name: Log in to Azure
         uses: azure/login@v2
         with:

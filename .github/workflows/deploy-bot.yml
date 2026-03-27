@@ -22,10 +22,11 @@ jobs:
           cache: "npm"
           cache-dependency-path: stock-copilot-agent/package-lock.json
 
-      - name: Install dependencies and build TypeScript
+      - name: Install dependencies, test, and build TypeScript
         working-directory: stock-copilot-agent
         run: |
           npm ci
+          npm test
           npm run build
 
       - name: Log in to Azure

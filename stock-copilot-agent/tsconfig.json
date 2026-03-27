@@ -11,5 +11,6 @@
     "tsBuildInfoFile": "./lib/.tsbuildinfo",
     "resolveJsonModule": true,
     "esModuleInterop": true
-  }
+  },
+  "exclude": ["tests/**/*", "node_modules", "lib"]
 }
