@@ -152,7 +152,7 @@ dev: kill-api kill-bot
 	@# Start API in background, log to file
 	@cd $(API_DIR) && \
 	  set -a && . .env && set +a && \
-	  $(UVICORN) stock_agent.api:app --host 127.0.0.1 --port 8000 --reload \
+	  $(UVICORN) stock_agent.api:app --host 127.0.0.1 --port 8000 --reload --reload-exclude "*.git*" \
 	  > /tmp/agents-dev/api.log 2>&1 & echo $$! > /tmp/agents-dev/api.pid
 	@# Wait for API to be ready
 	@echo "→ Waiting for API to start..."
@@ -186,7 +186,7 @@ dev-bg: kill-api kill-bot
 	@mkdir -p /tmp/agents-dev
 	@cd $(API_DIR) && \
 	  set -a && . .env && set +a && \
-	  $(UVICORN) stock_agent.api:app --host 127.0.0.1 --port 8000 --reload \
+	  $(UVICORN) stock_agent.api:app --host 127.0.0.1 --port 8000 --reload --reload-exclude "*.git*" \
 	  > /tmp/agents-dev/api.log 2>&1 & echo $$! > /tmp/agents-dev/api.pid
 	@echo "→ Waiting for API to start..."
 	@for i in 1 2 3 4 5 6 7 8 9 10; do \
@@ -224,7 +224,7 @@ dev-api: kill-api
 	@echo "   Press Ctrl+C to stop"
 	cd $(API_DIR) && \
 	  set -a && . .env && set +a && \
-	  $(UVICORN) stock_agent.api:app --host 127.0.0.1 --port 8000 --reload
+	  $(UVICORN) stock_agent.api:app --host 127.0.0.1 --port 8000 --reload --reload-exclude "*.git*"
 
 dev-bot: kill-bot
 	@echo "→ Starting Teams bot on port 3978"
