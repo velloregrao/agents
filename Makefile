@@ -130,8 +130,9 @@ dev: kill-api kill-bot
 	@# Start bot in background, log to file
 	@cd $(BOT_DIR) && \
 	  PYTHON_API_URL=http://127.0.0.1:8000 \
-	  BOT_ID=$$(grep BOT_ID ../.env | cut -d= -f2) \
-	  BOT_PASSWORD=$$(grep BOT_PASSWORD ../.env | cut -d= -f2) \
+	  BOT_ID=$$(grep ^BOT_ID ../.env | cut -d= -f2) \
+	  BOT_PASSWORD=$$(grep ^BOT_PASSWORD ../.env | cut -d= -f2) \
+	  BOT_TENANT_ID=$$(grep ^BOT_TENANT_ID ../.env | cut -d= -f2) \
 	  npm start \
 	  > /tmp/agents-dev/bot.log 2>&1 & echo $$! > /tmp/agents-dev/bot.pid
 	@echo "✅ Bot ready on port 3978"
@@ -165,8 +166,9 @@ dev-bot: kill-bot
 	@echo "   Press Ctrl+C to stop"
 	cd $(BOT_DIR) && \
 	  PYTHON_API_URL=http://127.0.0.1:8000 \
-	  BOT_ID=$$(grep BOT_ID ../.env | cut -d= -f2) \
-	  BOT_PASSWORD=$$(grep BOT_PASSWORD ../.env | cut -d= -f2) \
+	  BOT_ID=$$(grep ^BOT_ID ../.env | cut -d= -f2) \
+	  BOT_PASSWORD=$$(grep ^BOT_PASSWORD ../.env | cut -d= -f2) \
+	  BOT_TENANT_ID=$$(grep ^BOT_TENANT_ID ../.env | cut -d= -f2) \
 	  npm start
 
 docker-local:
