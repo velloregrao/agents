@@ -15,6 +15,7 @@ BOT_DIR    := stock-copilot-agent
 API_DIR    := stock-analysis-agent
 ACR        := stockbotregkava.azurecr.io
 RG         := stock-bot-rg
+BOT_NAME   := stock-copilot-agent
 
 # ── Help ──────────────────────────────────────────────────────────────────────
 
@@ -107,6 +108,19 @@ ngrok:
 	@pkill ngrok 2>/dev/null || true
 	@sleep 1
 	ngrok http 3978
+
+# After ngrok starts, run: make bot-local NGROK_URL=https://xxxx.ngrok-free.app
+bot-local:
+	@test -n "$(NGROK_URL)" || (echo "❌ Usage: make bot-local NGROK_URL=https://xxxx.ngrok-free.app" && exit 1)
+	az bot update --resource-group $(RG) --name $(BOT_NAME) \
+	  --endpoint "$(NGROK_URL)/api/messages"
+	@echo "✅ Azure Bot now pointing to $(NGROK_URL)"
+
+# Restore Azure Bot to point back to the cloud deployment
+bot-azure:
+	az bot update --resource-group $(RG) --name $(BOT_NAME) \
+	  --endpoint "https://stock-bot.salmonsky-548aa144.eastus.azurecontainerapps.io/api/messages"
+	@echo "✅ Azure Bot restored to cloud endpoint"
 
 kill-api:
 	@lsof -ti :8000 | xargs kill -9 2>/dev/null; sleep 1 && echo "✅ Port 8000 freed" || echo "ℹ️  Nothing running on port 8000"
