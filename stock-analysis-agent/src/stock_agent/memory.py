@@ -10,7 +10,9 @@ from datetime import datetime
 from pathlib import Path
 from pathlib import Path
 
-DB_PATH = os.getenv("DB_PATH", str(Path.home() / "Projects" / "data" / "trading_memory.db"))
+DB_PATH = os.getenv("DB_PATH", str(
+    Path.home() / "Library" / "Mobile Documents" / "com~apple~CloudDocs" / "Projects" / "data" / "trading_memory.db"
+))
 
 
 def _get_connection() -> sqlite3.Connection:
