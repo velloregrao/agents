@@ -8,7 +8,7 @@
         ngrok ngrok-stop bot-local bot-azure verify \
         docker-local docker-local-down deploy \
         logs-azure-bot logs-azure-api logs-local \
-        clean check-env
+        cost clean check-env
 
 PYTHON     := $(PWD)/stock-analysis-agent/.venv/bin/python3
 UVICORN    := $(PWD)/stock-analysis-agent/.venv/bin/uvicorn
@@ -286,6 +286,15 @@ logs-azure-bot:
 
 logs-local:
 	docker compose -f docker-compose.yml -f docker-compose.local.yml logs -f
+
+# ── Cost Report ───────────────────────────────────────────────────────────────
+
+cost:
+	@echo "→ Fetching actual Azure costs + service summary..."
+	@python3 $(PWD)/tools/cost_report.py --days 30
+
+cost-7:
+	@python3 $(PWD)/tools/cost_report.py --days 7
 
 # ── Clean ─────────────────────────────────────────────────────────────────────
 
