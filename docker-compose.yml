@@ -1,0 +1,33 @@
+version: "3.9"
+
+services:
+  python-api:
+    build: ./stock-analysis-agent
+    ports:
+      - "8000:8000"
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - ALPACA_API_KEY=${ALPACA_API_KEY}
+      - ALPACA_API_SECRET=${ALPACA_API_SECRET}
+      - DB_PATH=${DB_PATH:-/data/trading_memory.db}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+
+  bot:
+    build: ./stock-copilot-agent
+    ports:
+      - "3978:3978"
+    environment:
+      - BOT_ID=${BOT_ID}
+      - BOT_PASSWORD=${BOT_PASSWORD}
+      - BOT_TENANT_ID=${BOT_TENANT_ID}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - PYTHON_API_URL=http://python-api:8000
+    depends_on:
+      python-api:
+        condition: service_healthy
+    restart: unless-stopped

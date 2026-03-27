@@ -1,0 +1,22 @@
+# Local Docker override — used for pre-Azure validation on Mac
+# Usage: docker compose -f docker-compose.yml -f docker-compose.local.yml up
+
+version: "3.9"
+
+services:
+  python-api:
+    volumes:
+      # Mount local src so code changes reflect without rebuild
+      - ./stock-analysis-agent/src:/app/src
+      # Mount local data dir so SQLite persists between runs
+      - ./data:/data
+    environment:
+      - DB_PATH=/data/trading_memory.db
+
+  bot:
+    volumes:
+      # Mount compiled JS so you can rebuild without docker rebuild
+      - ./stock-copilot-agent/lib:/app/lib
+    environment:
+      # Point to local Python API (no ngrok needed in Docker mode)
+      - PYTHON_API_URL=http://python-api:8000

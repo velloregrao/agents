@@ -1,0 +1,59 @@
+# Exclude nested repos not part of this project
+first-agent/
+
+# Claude Code workspace settings
+.claude/
+
+# Environment variables — never commit real credentials
+.env
+.env.local
+*.env.local
+env/.env.*.user
+env/.env.local
+
+# OAuth tokens
+schwab_token.json
+*.token.json
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Node
+node_modules/
+lib/
+npm-debug.log*
+
+# macOS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+
+# Docker
+docker-compose.override.yml
+
+# Database (local dev only — use Azure Files in production)
+*.db
+*.sqlite
+*.sqlite3
+
+# TeamsFx
+appPackage/build
+.localConfigs
+.localConfigs.testTool
+.notification.localstore.json
+.notification.testtoolstore.json
+.deployment
+
+# Logs
+*.log
+devTools/*.log

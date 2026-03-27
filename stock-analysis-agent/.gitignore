@@ -1,0 +1,25 @@
+# Environment variables
+.env
+.env.local
+
+# OAuth tokens
+schwab_token.json
+*.token.json
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+
+# Database
+*.db
+*.sqlite
+*.sqlite3
+
+# macOS
+.DS_Store
