@@ -52,3 +52,23 @@ jobs:
             --resource-group stock-bot-rg \
             --image ${{ secrets.ACR_LOGIN_SERVER }}/python-api:${{ github.sha }} \
             --set-env-vars "DEPLOYED_AT=${{ github.run_id }}"
+
+      - name: Wait for container to become ready
+        run: sleep 30
+
+      - name: Post-deploy deep health check
+        run: |
+          FQDN=$(az containerapp show \
+            --name python-api \
+            --resource-group stock-bot-rg \
+            --query properties.configuration.ingress.fqdn \
+            --output tsv)
+          URL="https://${FQDN}/health/deep"
+          echo "Probing ${URL}"
+          STATUS=$(curl -sf -o /tmp/health.json -w "%{http_code}" "${URL}")
+          echo "Response: $(cat /tmp/health.json)"
+          if [ "${STATUS}" != "200" ]; then
+            echo "❌ Deep health check returned ${STATUS} — deploy failed"
+            exit 1
+          fi
+          echo "✅ Deep health check passed"

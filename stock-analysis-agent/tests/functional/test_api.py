@@ -23,6 +23,39 @@ def test_health(client):
     assert "version" in data
 
 
+# ── Deep health ───────────────────────────────────────────────────────────────
+
+@patch("stock_agent.api.get_account_balance", return_value={"cash": 100000, "portfolio_value": 100000, "buying_power": 100000})
+@patch("stock_agent.api._client")
+def test_health_deep_all_ok(mock_claude, mock_bal, client):
+    """All dependencies healthy → 200 ok."""
+    mock_claude.messages.create.return_value = MagicMock()
+    response = client.get("/health/deep")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["status"] == "ok"
+    assert data["checks"]["anthropic"] == "ok"
+    assert data["checks"]["alpaca"] == "ok"
+
+
+@patch("stock_agent.api.get_account_balance", return_value={"cash": 100000, "portfolio_value": 100000, "buying_power": 100000})
+@patch("stock_agent.api._client")
+def test_health_deep_bad_anthropic_key(mock_claude, mock_bal, client):
+    """Invalid Anthropic key → 503 degraded."""
+    import anthropic as _anthropic
+    mock_claude.messages.create.side_effect = _anthropic.AuthenticationError(
+        message="invalid x-api-key",
+        response=MagicMock(status_code=401, headers={}),
+        body={"error": {"type": "authentication_error"}},
+    )
+    response = client.get("/health/deep")
+    assert response.status_code == 503
+    data = response.json()
+    assert data["status"] == "degraded"
+    assert "invalid API key" in data["checks"]["anthropic"]
+    assert data["checks"]["alpaca"] == "ok"
+
+
 # ── Portfolio ─────────────────────────────────────────────────────────────────
 
 @patch("stock_agent.api.get_account_balance", return_value={"cash": 100000, "portfolio_value": 100000, "buying_power": 100000})

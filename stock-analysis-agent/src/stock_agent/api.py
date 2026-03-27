@@ -25,6 +25,7 @@ load_dotenv(Path(__file__).resolve().parent.parent.parent / ".env", override=Tru
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 import anthropic
 
@@ -84,11 +85,57 @@ class ResearchRequest(BaseModel):
     request: str = ""
 
 
-# ── Health check ──────────────────────────────────────────────────────────────
+# ── Health checks ─────────────────────────────────────────────────────────────
 
 @app.get("/health")
 def health():
     return {"status": "ok", "service": "stock-agent-api", "version": "2"}
+
+
+@app.get("/health/deep")
+def health_deep():
+    """
+    Deep liveness probe — verifies every critical external dependency.
+
+    Makes a real 1-token Haiku call to confirm the Anthropic API key is valid,
+    and a real Alpaca call to confirm broker connectivity.
+
+    Returns 200 {"status": "ok", "checks": {...}} if all pass.
+    Returns 503 {"status": "degraded", "checks": {...}} if any fail.
+
+    Used as a post-deploy gate in the GitHub Actions workflow so a bad key
+    rotation or missing secret fails the pipeline before users are affected.
+    """
+    checks: dict[str, str] = {}
+
+    # ── Anthropic ─────────────────────────────────────────────────────────────
+    try:
+        _client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=1,
+            messages=[{"role": "user", "content": "ping"}],
+        )
+        checks["anthropic"] = "ok"
+    except anthropic.AuthenticationError:
+        checks["anthropic"] = "error: invalid API key"
+    except Exception as e:
+        checks["anthropic"] = f"error: {e}"
+
+    # ── Alpaca ────────────────────────────────────────────────────────────────
+    try:
+        result = get_account_balance()
+        if result.get("error"):
+            checks["alpaca"] = f"error: {result['error']}"
+        else:
+            checks["alpaca"] = "ok"
+    except Exception as e:
+        checks["alpaca"] = f"error: {e}"
+
+    overall = all(v == "ok" for v in checks.values())
+    return JSONResponse(
+        status_code=200 if overall else 503,
+        content={"status": "ok" if overall else "degraded", "checks": checks},
+    )
 
 
 # ── Analyze a single stock ────────────────────────────────────────────────────
