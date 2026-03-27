@@ -4,7 +4,8 @@
 # ─────────────────────────────────────────────────────────────────────────────
 
 .PHONY: help setup setup-python setup-bot test test-python test-bot test-integration \
-        dev dev-bg dev-stop dev-api dev-bot kill-api kill-bot verify \
+        dev dev-bg dev-stop dev-api dev-bot kill-api kill-bot \
+        ngrok ngrok-stop bot-local bot-azure verify \
         docker-local docker-local-down deploy \
         logs-azure-bot logs-azure-api logs-local \
         clean check-env
@@ -107,9 +108,24 @@ test-integration:
 ngrok:
 	@pkill ngrok 2>/dev/null || true
 	@sleep 1
-	ngrok http 3978
+	@ngrok http 3978 > /tmp/agents-dev/ngrok.log 2>&1 & echo $$! > /tmp/agents-dev/ngrok.pid
+	@echo "→ Waiting for ngrok tunnel..."
+	@for i in 1 2 3 4 5 6 7 8 9 10; do \
+	  curl -sf http://127.0.0.1:4040/api/tunnels > /dev/null 2>&1 && break; \
+	  sleep 1; \
+	done
+	@NGROK_URL=$$(curl -sf http://127.0.0.1:4040/api/tunnels | python3 -c "import sys,json; print(json.load(sys.stdin)['tunnels'][0]['public_url'])") && \
+	  az bot update --resource-group $(RG) --name $(BOT_NAME) --endpoint "$$NGROK_URL/api/messages" > /dev/null && \
+	  echo "✅ ngrok tunnel: $$NGROK_URL" && \
+	  echo "✅ Azure Bot endpoint updated"
+	@echo "   Stop tunnel → make ngrok-stop"
 
-# After ngrok starts, run: make bot-local NGROK_URL=https://xxxx.ngrok-free.app
+ngrok-stop:
+	@test -f /tmp/agents-dev/ngrok.pid && kill $$(cat /tmp/agents-dev/ngrok.pid) 2>/dev/null || pkill ngrok 2>/dev/null || true
+	@rm -f /tmp/agents-dev/ngrok.pid /tmp/agents-dev/ngrok.log
+	@echo "✅ ngrok stopped"
+
+# Restore Azure Bot to point back to the cloud deployment
 bot-local:
 	@test -n "$(NGROK_URL)" || (echo "❌ Usage: make bot-local NGROK_URL=https://xxxx.ngrok-free.app" && exit 1)
 	az bot update --resource-group $(RG) --name $(BOT_NAME) \
@@ -199,6 +215,7 @@ dev-stop:
 	@echo "→ Stopping all dev services..."
 	@lsof -ti :8000 | xargs kill -9 2>/dev/null || true
 	@lsof -ti :3978 | xargs kill -9 2>/dev/null || true
+	@pkill ngrok 2>/dev/null || true
 	@rm -rf /tmp/agents-dev
 	@echo "✅ All dev services stopped"
 
