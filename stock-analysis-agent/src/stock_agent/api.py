@@ -5,9 +5,10 @@ Replaces Python subprocess calls from the Teams bot with proper HTTP endpoints.
 
 import os
 import json
+from pathlib import Path
 from dotenv import load_dotenv
 
-load_dotenv("/Users/velloregrao/Projects/agents/stock-analysis-agent/.env", override=True)
+load_dotenv(Path(__file__).resolve().parent.parent.parent / ".env", override=True)
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -86,7 +87,7 @@ def analyze(req: TickerRequest):
         }, default=str)
 
         response = _client.messages.create(
-            model="claude-sonnet-4-5",
+            model="claude-sonnet-4-6",
             max_tokens=2048,
             messages=[{
                 "role": "user",
@@ -199,30 +200,39 @@ def _handle_orchestrator_tool(name: str, inputs: dict) -> str:
     except Exception as e:
         return json.dumps({"error": str(e)})
 
+def run_research_orchestrator(ticker: str, user_request: str) -> str:
+    """
+    Agentic research loop: Claude calls tools until it has enough data
+    to produce a full buy/hold/sell recommendation.
+    Extracted from the /research endpoint so it can be reused by
+    orchestrator/router.py in Phase 2.
+    """
+    messages = [{"role": "user", "content": user_request}]
+    while True:
+        response = _client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=4096,
+            system=ORCHESTRATOR_SYSTEM,
+            tools=ORCHESTRATOR_TOOLS,
+            messages=messages,
+        )
+        tool_calls = [b for b in response.content if b.type == "tool_use"]
+        if response.stop_reason == "end_turn":
+            return " ".join(b.text for b in response.content if b.type == "text")
+        tool_results = []
+        for tc in tool_calls:
+            result = _handle_orchestrator_tool(tc.name, tc.input)
+            tool_results.append({"type": "tool_result", "tool_use_id": tc.id, "content": result})
+        messages.append({"role": "assistant", "content": response.content})
+        messages.append({"role": "user", "content": tool_results})
+
+
 @app.post("/research")
 def research(req: ResearchRequest):
     ticker = req.ticker.upper()
     user_request = req.request or f"Research {ticker} and give me a detailed buy/hold/sell recommendation"
     try:
-        messages = [{"role": "user", "content": user_request}]
-        while True:
-            response = _client.messages.create(
-                model="claude-sonnet-4-6",
-                max_tokens=4096,
-                system=ORCHESTRATOR_SYSTEM,
-                tools=ORCHESTRATOR_TOOLS,
-                messages=messages
-            )
-            tool_calls = [b for b in response.content if b.type == "tool_use"]
-            if response.stop_reason == "end_turn":
-                text = " ".join(b.text for b in response.content if b.type == "text")
-                return {"result": text}
-            tool_results = []
-            for tc in tool_calls:
-                result = _handle_orchestrator_tool(tc.name, tc.input)
-                tool_results.append({"type": "tool_result", "tool_use_id": tc.id, "content": result})
-            messages.append({"role": "assistant", "content": response.content})
-            messages.append({"role": "user", "content": tool_results})
+        return {"result": run_research_orchestrator(ticker, user_request)}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

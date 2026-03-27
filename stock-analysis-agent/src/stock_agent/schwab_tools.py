@@ -5,12 +5,14 @@ Wraps schwab-py client for use as Claude tool calls.
 
 import os
 import json
+from pathlib import Path
 from dotenv import load_dotenv
 import schwab
 
 load_dotenv()
 
-TOKEN_PATH = "/Users/velloregrao/Projects/agents/stock-analysis-agent/schwab_token.json"
+_DEFAULT_TOKEN_PATH = Path(__file__).resolve().parent.parent.parent / "schwab_token.json"
+TOKEN_PATH = os.getenv("SCHWAB_TOKEN_PATH", str(_DEFAULT_TOKEN_PATH))
 PAPER_ACCOUNT = "68910787"  # CASH account with balance
 PAPER_ACCOUNT_HASH = "B83E5A3A7B130E89A82EDCD95C10DE138CA10E14DEE2E861957570300E0AE99B"
 
