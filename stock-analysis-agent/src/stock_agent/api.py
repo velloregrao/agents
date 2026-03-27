@@ -1,9 +1,18 @@
 """
 FastAPI HTTP wrapper for the stock trading agent.
-Replaces Python subprocess calls from the Teams bot with proper HTTP endpoints.
+
+Public surface:
+    POST /agent   — single platform-agnostic endpoint, used by all channel adapters
+    GET  /health  — liveness probe
+
+Legacy per-intent endpoints (/analyze, /trade, /research, /portfolio, /reflect,
+/monitor) are retained for direct API testing but are no longer called by any
+channel adapter.
 """
 
 import os
+import re
+import sys
 import json
 from pathlib import Path
 from dotenv import load_dotenv
@@ -27,10 +36,16 @@ from stock_agent.memory import (
     get_performance_summary,
     initialize_db,
 )
+from stock_agent.agent import run_analysis
 from stock_agent.trading_agent import run_trading_agent, monitor_positions
 from stock_agent.reflection import reflect
 from stock_agent.alpaca_tools import place_order, close_position
 from stock_agent.memory import get_recent_trades, get_lessons
+
+# Make orchestrator/ importable from api.py
+# (agents root is 3 levels above this file)
+_AGENTS_ROOT = Path(__file__).resolve().parent.parent.parent.parent
+sys.path.insert(0, str(_AGENTS_ROOT))
 
 app = FastAPI(title="Stock Trading Agent API", version="1.0.0")
 
@@ -233,6 +248,185 @@ def research(req: ResearchRequest):
     user_request = req.request or f"Research {ticker} and give me a detailed buy/hold/sell recommendation"
     try:
         return {"result": run_research_orchestrator(ticker, user_request)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Intent routing (ported from teamsBot.ts parseIntent) ─────────────────────
+# Phase 2 will replace this regex approach with Claude Haiku classification.
+
+_SKIP_WORDS = {
+    "ANALYZE", "ANALYSIS", "STOCK", "SHARE", "PRICE", "GET", "SHOW",
+    "TELL", "WHAT", "HOW", "IS", "THE", "FOR", "ME", "TRADE", "TRADES",
+    "BUY", "SELL", "PORTFOLIO", "PERFORMANCE", "REFLECT", "REFLECTION",
+    "MONITOR", "POSITIONS", "HELP", "HI", "HELLO", "AND", "ON", "A",
+    "RUN", "CHECK", "MY",
+}
+
+def _parse_intent(text: str) -> tuple[str, list[str]]:
+    """Classify intent and extract ticker symbols from raw user text."""
+    upper = text.upper()
+    words = re.sub(r"[^A-Z\s]", "", upper).split()
+    tickers = [w for w in words if 1 <= len(w) <= 5 and w not in _SKIP_WORDS]
+
+    if re.match(r"^(hi|hello|hey|help)$", text.strip(), re.IGNORECASE):
+        return "help", []
+    if re.search(r"monitor|check\s+positions|review\s+positions", text, re.IGNORECASE):
+        return "monitor", []
+    if re.search(r"portfolio|positions|holdings", text, re.IGNORECASE):
+        return "portfolio", tickers
+    if re.search(r"performance|stats|statistics|pnl|profit", text, re.IGNORECASE):
+        return "portfolio", tickers
+    if re.search(r"reflect|reflection|lessons|learn", text, re.IGNORECASE):
+        return "reflect", []
+    if re.search(r"research|deep.?dive|full.?analysis|recommend", text, re.IGNORECASE) and tickers:
+        return "research", tickers
+    if re.search(r"trade|buy|sell|invest|run\s+agent", text, re.IGNORECASE) and tickers:
+        return "trade", tickers
+    if tickers:
+        return "analyze", tickers
+    return "unknown", []
+
+
+# ── Portfolio formatter (ported from teamsBot.ts getPortfolio) ────────────────
+
+def _format_portfolio() -> str:
+    """Fetch portfolio data and return markdown-formatted summary."""
+    balance  = get_account_balance()
+    pos_data = get_positions()
+    perf     = get_performance_summary()
+
+    if balance.get("error"):
+        return f"❌ Alpaca API error: {balance['error']}"
+
+    def fmt(n) -> str:
+        try:
+            return f"{float(n):,.2f}"
+        except (TypeError, ValueError):
+            return "N/A"
+
+    positions = pos_data.get("positions", [])
+
+    lines = [
+        "## 📊 Portfolio Status\n",
+        f"**Cash:** ${fmt(balance.get('cash'))}  "
+        f"**Portfolio Value:** ${fmt(balance.get('portfolio_value'))}  "
+        f"**Buying Power:** ${fmt(balance.get('buying_power'))}\n",
+    ]
+
+    if positions:
+        lines.append("### Open Positions")
+        for p in positions:
+            pnl     = float(p.get("unrealized_pnl") or 0)
+            pnl_pct = float(p.get("unrealized_pnl_pct") or 0)
+            emoji   = "📈" if pnl >= 0 else "📉"
+            sign    = "+" if pnl >= 0 else ""
+            lines.append(
+                f"- **{p['ticker']}**: {p['quantity']} shares "
+                f"@ ${fmt(p.get('entry_price'))} | "
+                f"Current: ${fmt(p.get('current_price'))} | "
+                f"{emoji} {sign}${pnl:.2f} ({pnl_pct:.1f}%)"
+            )
+    else:
+        lines.append("### No open positions")
+
+    if perf.get("total_trades", 0) > 0:
+        lines += [
+            "\n### Performance",
+            f"- **Total Trades:** {perf['total_trades']}",
+            f"- **Win Rate:** {perf.get('win_rate')}%",
+            f"- **Total P&L:** ${perf.get('total_pnl')}",
+            f"- **Avg Return:** {perf.get('avg_return_pct')}%",
+        ]
+
+    return "\n".join(lines)
+
+
+# ── Intent dispatcher ─────────────────────────────────────────────────────────
+
+def _dispatch(intent: str, tickers: list[str], raw_text: str) -> str:
+    """Route a classified intent to the correct agent pipeline."""
+    if intent == "help":
+        return (
+            "## 🤖 Stock Trading Agent\n\n"
+            "**Commands:**\n"
+            "- **Analyze AAPL** — Quick stock analysis\n"
+            "- **Research NVDA** — Deep multi-agent research (news + technicals + memory)\n"
+            "- **Trade AAPL MSFT TSLA** — Run trading agent on watchlist\n"
+            "- **Portfolio** — Show positions and balance\n"
+            "- **Reflect** — Extract lessons from trade history\n"
+            "- **Monitor** — Review open positions for exits\n\n"
+            "*Powered by Claude + Alpaca paper trading*"
+        )
+
+    if intent == "analyze" and tickers:
+        return run_analysis(tickers[0])
+
+    if intent == "research" and tickers:
+        user_request = raw_text or f"Research {tickers[0]} and give me a detailed buy/hold/sell recommendation"
+        return run_research_orchestrator(tickers[0], user_request)
+
+    if intent == "trade" and tickers:
+        return run_trading_agent(tickers, raw_text or None)
+
+    if intent == "portfolio":
+        return _format_portfolio()
+
+    if intent == "reflect":
+        result = reflect(min_trades=1)
+        if result.get("status") == "skipped":
+            return f"⚠️ {result['reason']}"
+        lines = [
+            "## 🧠 Reflection Complete\n",
+            f"**Trades Analyzed:** {result.get('trades_analyzed')}",
+            f"**Lessons Extracted:** {result.get('lessons_extracted')}\n",
+            "### New Lessons",
+        ]
+        for i, lesson in enumerate(result.get("lessons", []), 1):
+            lines.append(f"{i}. {lesson}")
+        lines.append(f"\n### Summary\n{result.get('summary', '')}")
+        return "\n".join(lines)
+
+    if intent == "monitor":
+        return monitor_positions()
+
+    return (
+        "I didn't understand that. Try:\n"
+        "- **Analyze AAPL**\n"
+        "- **Trade AAPL MSFT**\n"
+        "- **Portfolio**\n"
+        "- **Reflect**\n"
+        "- **Monitor**"
+    )
+
+
+# ── /agent — single platform-agnostic endpoint ────────────────────────────────
+
+class AgentRequest(BaseModel):
+    user_id:   str
+    platform:  str = "teams"
+    text:      str
+    thread_id: str = ""
+    timestamp: str = ""
+
+class AgentResponseModel(BaseModel):
+    intent:            str
+    text:              str
+    requires_approval: bool       = False
+    approval_context:  dict | None = None
+
+@app.post("/agent", response_model=AgentResponseModel)
+def agent_endpoint(req: AgentRequest):
+    """
+    Single entry point for all channel adapters.
+    Receives a normalised AgentMessage, returns a normalised AgentResponse.
+    Phase 2 will replace _parse_intent() with Claude Haiku classification
+    inside orchestrator/router.py.
+    """
+    try:
+        intent, tickers = _parse_intent(req.text)
+        text = _dispatch(intent, tickers, req.text)
+        return AgentResponseModel(intent=intent, text=text)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
