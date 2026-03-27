@@ -103,6 +103,11 @@ test-integration:
 
 # ── Local Dev ─────────────────────────────────────────────────────────────────
 
+ngrok:
+	@pkill ngrok 2>/dev/null || true
+	@sleep 1
+	ngrok http 3978
+
 kill-api:
 	@lsof -ti :8000 | xargs kill -9 2>/dev/null; sleep 1 && echo "✅ Port 8000 freed" || echo "ℹ️  Nothing running on port 8000"
 
