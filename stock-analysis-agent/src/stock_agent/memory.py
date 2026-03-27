@@ -72,6 +72,20 @@ def initialize_db():
         )
     """)
 
+    # Token usage — every Claude API call
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS token_usage (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            call_type TEXT NOT NULL,
+            model TEXT NOT NULL,
+            input_tokens INTEGER NOT NULL,
+            output_tokens INTEGER NOT NULL,
+            cache_read_tokens INTEGER DEFAULT 0,
+            cache_write_tokens INTEGER DEFAULT 0,
+            created_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
     conn.commit()
     conn.close()
     print(f"Memory store initialized at {DB_PATH}")
@@ -317,6 +331,130 @@ def get_performance_summary() -> dict:
 
         conn.close()
         return stats
+    except Exception as e:
+        return {"error": str(e)}
+
+
+def log_token_usage(
+    call_type: str,
+    model: str,
+    input_tokens: int,
+    output_tokens: int,
+    cache_read_tokens: int = 0,
+    cache_write_tokens: int = 0,
+) -> None:
+    """
+    Record token usage from a Claude API call.
+
+    Args:
+        call_type:          e.g. 'analyze', 'trade', 'reflect', 'research'
+        model:              Claude model ID used
+        input_tokens:       Input tokens billed
+        output_tokens:      Output tokens billed
+        cache_read_tokens:  Prompt cache read tokens (billed at 10% of input)
+        cache_write_tokens: Prompt cache write tokens (billed at 125% of input)
+    """
+    try:
+        conn = _get_connection()
+        conn.execute("""
+            INSERT INTO token_usage
+            (call_type, model, input_tokens, output_tokens,
+             cache_read_tokens, cache_write_tokens)
+            VALUES (?, ?, ?, ?, ?, ?)
+        """, (call_type, model, input_tokens, output_tokens,
+              cache_read_tokens, cache_write_tokens))
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass  # Never let token logging break the main flow
+
+
+def get_token_usage_summary(days: int = 30) -> dict:
+    """
+    Return token usage and estimated cost for the last N days.
+
+    Pricing (per 1M tokens, Sonnet 4.6):
+        Input:             $3.00
+        Output:            $15.00
+        Cache read:        $0.30  (10% of input)
+        Cache write:       $3.75  (125% of input)
+    """
+    # Pricing per token
+    PRICING = {
+        "claude-sonnet-4-6": {
+            "input":        3.00 / 1_000_000,
+            "output":      15.00 / 1_000_000,
+            "cache_read":   0.30 / 1_000_000,
+            "cache_write":  3.75 / 1_000_000,
+        },
+        "claude-opus-4-6": {
+            "input":        5.00 / 1_000_000,
+            "output":      25.00 / 1_000_000,
+            "cache_read":   0.50 / 1_000_000,
+            "cache_write":  6.25 / 1_000_000,
+        },
+        "claude-haiku-4-5": {
+            "input":        1.00 / 1_000_000,
+            "output":       5.00 / 1_000_000,
+            "cache_read":   0.10 / 1_000_000,
+            "cache_write":  1.25 / 1_000_000,
+        },
+    }
+    DEFAULT_PRICING = PRICING["claude-sonnet-4-6"]
+
+    try:
+        conn = _get_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT call_type, model,
+                   SUM(input_tokens)        as input_tokens,
+                   SUM(output_tokens)       as output_tokens,
+                   SUM(cache_read_tokens)   as cache_read_tokens,
+                   SUM(cache_write_tokens)  as cache_write_tokens,
+                   COUNT(*)                 as api_calls
+            FROM token_usage
+            WHERE created_at >= datetime('now', ? || ' days')
+            GROUP BY call_type, model
+            ORDER BY call_type
+        """, (f"-{days}",))
+
+        rows = [dict(r) for r in cursor.fetchall()]
+
+        # Totals across all rows
+        cursor.execute("""
+            SELECT SUM(input_tokens)       as input_tokens,
+                   SUM(output_tokens)      as output_tokens,
+                   SUM(cache_read_tokens)  as cache_read_tokens,
+                   SUM(cache_write_tokens) as cache_write_tokens,
+                   COUNT(*)                as api_calls
+            FROM token_usage
+            WHERE created_at >= datetime('now', ? || ' days')
+        """, (f"-{days}",))
+        totals = dict(cursor.fetchone())
+        conn.close()
+
+        # Calculate cost per row
+        for row in rows:
+            p = PRICING.get(row["model"], DEFAULT_PRICING)
+            row["cost_usd"] = round(
+                row["input_tokens"]       * p["input"]       +
+                row["output_tokens"]      * p["output"]      +
+                row["cache_read_tokens"]  * p["cache_read"]  +
+                row["cache_write_tokens"] * p["cache_write"],
+                4,
+            )
+
+        # Calculate total cost
+        total_cost = 0.0
+        for row in rows:
+            total_cost += row["cost_usd"]
+
+        return {
+            "days": days,
+            "by_call_type": rows,
+            "totals": totals,
+            "total_cost_usd": round(total_cost, 4),
+        }
     except Exception as e:
         return {"error": str(e)}
 

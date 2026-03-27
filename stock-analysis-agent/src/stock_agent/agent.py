@@ -5,6 +5,7 @@ import json
 import anthropic
 
 from .tools import TOOL_DEFINITIONS, execute_tool
+from .memory import log_token_usage
 
 SYSTEM_PROMPT = """You are a professional stock analyst. When given a ticker symbol,
 you systematically gather data using the available tools and produce a clear,
@@ -48,6 +49,16 @@ def run_analysis(ticker: str, verbose: bool = False) -> str:
             system=SYSTEM_PROMPT,
             tools=TOOL_DEFINITIONS,
             messages=messages,
+        )
+
+        # Log token usage
+        log_token_usage(
+            call_type="analyze",
+            model=response.model,
+            input_tokens=response.usage.input_tokens,
+            output_tokens=response.usage.output_tokens,
+            cache_read_tokens=getattr(response.usage, "cache_read_input_tokens", 0) or 0,
+            cache_write_tokens=getattr(response.usage, "cache_creation_input_tokens", 0) or 0,
         )
 
         # Collect tool use blocks

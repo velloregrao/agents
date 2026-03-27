@@ -27,6 +27,7 @@ from stock_agent.memory import (
     get_open_trades,
     get_performance_summary,
     initialize_db,
+    log_token_usage,
 )
 from stock_agent.reflection import get_relevant_lessons, reflect
 
@@ -287,6 +288,15 @@ For each stock:
             system=system_prompt,
             tools=TOOLS,
             messages=messages,
+        )
+
+        log_token_usage(
+            call_type="trade",
+            model=response.model,
+            input_tokens=response.usage.input_tokens,
+            output_tokens=response.usage.output_tokens,
+            cache_read_tokens=getattr(response.usage, "cache_read_input_tokens", 0) or 0,
+            cache_write_tokens=getattr(response.usage, "cache_creation_input_tokens", 0) or 0,
         )
 
         tool_use_blocks = [b for b in response.content if b.type == "tool_use"]

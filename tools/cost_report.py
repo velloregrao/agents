@@ -12,12 +12,82 @@ Usage:
 import argparse
 import json
 import os
+import sqlite3
 import subprocess
+import sys
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 # ── Config ────────────────────────────────────────────────────────────────────
 SUBSCRIPTION_ID = os.getenv("AZURE_SUBSCRIPTION_ID", "")
 RESOURCE_GROUP = os.getenv("AZURE_RESOURCE_GROUP", "stock-bot-rg")
+DB_PATH = os.getenv(
+    "DB_PATH",
+    str(Path(__file__).parents[1] / "stock-analysis-agent" / "trading_memory.db"),
+)
+
+
+# ── Anthropic usage from SQLite ───────────────────────────────────────────────
+
+PRICING = {
+    "claude-sonnet-4-6": {"input": 3.00, "output": 15.00, "cache_read": 0.30, "cache_write": 3.75},
+    "claude-opus-4-6":   {"input": 5.00, "output": 25.00, "cache_read": 0.50, "cache_write": 6.25},
+    "claude-haiku-4-5":  {"input": 1.00, "output":  5.00, "cache_read": 0.10, "cache_write": 1.25},
+}
+DEFAULT_PRICING = PRICING["claude-sonnet-4-6"]
+
+
+def get_anthropic_usage(days: int) -> dict:
+    """Read token usage from the local SQLite DB and calculate cost."""
+    if not Path(DB_PATH).exists():
+        return {"error": f"DB not found at {DB_PATH}"}
+
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.row_factory = sqlite3.Row
+        cur = conn.cursor()
+
+        cur.execute("""
+            SELECT call_type, model,
+                   SUM(input_tokens)       AS input_tokens,
+                   SUM(output_tokens)      AS output_tokens,
+                   SUM(cache_read_tokens)  AS cache_read_tokens,
+                   SUM(cache_write_tokens) AS cache_write_tokens,
+                   COUNT(*)                AS api_calls
+            FROM token_usage
+            WHERE created_at >= datetime('now', ? || ' days')
+            GROUP BY call_type, model
+            ORDER BY call_type
+        """, (f"-{days}",))
+        rows = [dict(r) for r in cur.fetchall()]
+
+        cur.execute("""
+            SELECT SUM(input_tokens)       AS input_tokens,
+                   SUM(output_tokens)      AS output_tokens,
+                   SUM(cache_read_tokens)  AS cache_read_tokens,
+                   SUM(cache_write_tokens) AS cache_write_tokens,
+                   COUNT(*)                AS api_calls
+            FROM token_usage
+            WHERE created_at >= datetime('now', ? || ' days')
+        """, (f"-{days}",))
+        totals = dict(cur.fetchone())
+        conn.close()
+
+        for row in rows:
+            p = PRICING.get(row["model"], DEFAULT_PRICING)
+            row["cost_usd"] = round(
+                (row["input_tokens"]       * p["input"]       +
+                 row["output_tokens"]      * p["output"]      +
+                 row["cache_read_tokens"]  * p["cache_read"]  +
+                 row["cache_write_tokens"] * p["cache_write"]) / 1_000_000,
+                4,
+            )
+
+        total_cost = sum(r["cost_usd"] for r in rows)
+        return {"by_call_type": rows, "totals": totals, "total_cost_usd": round(total_cost, 4)}
+
+    except Exception as e:
+        return {"error": str(e)}
 
 
 # ── Azure CLI helpers ─────────────────────────────────────────────────────────
@@ -219,11 +289,44 @@ def run_report(days: int) -> None:
         print(f"  {'─' * 50}")
         print(f"    Estimated Total                      ~$13–26/month")
 
+    # ── Anthropic actual usage ────────────────────────────────────────────────
+    print_section("Anthropic API — Actual Usage")
+    anthropic_data = get_anthropic_usage(days)
+
+    if "error" in anthropic_data:
+        print(f"\n  (DB not found — usage tracking starts after first API call)")
+    elif anthropic_data["totals"]["api_calls"] == 0:
+        print(f"\n  No API calls recorded in the last {days} days.")
+        print(f"  Token tracking activates automatically on the next analyze/trade/reflect call.")
+    else:
+        t = anthropic_data["totals"]
+        print(f"\n  {'Call type':<15} {'API calls':>10} {'Input tok':>12} {'Output tok':>12} {'Cost':>10}")
+        print(f"  {'─' * 62}")
+        for row in anthropic_data["by_call_type"]:
+            print(
+                f"  {row['call_type']:<15}"
+                f" {row['api_calls']:>10}"
+                f" {row['input_tokens']:>12,}"
+                f" {row['output_tokens']:>12,}"
+                f" {fmt_usd(row['cost_usd']):>10}"
+            )
+        print(f"  {'─' * 62}")
+        print(
+            f"  {'TOTAL':<15}"
+            f" {t['api_calls']:>10}"
+            f" {t['input_tokens']:>12,}"
+            f" {t['output_tokens']:>12,}"
+            f" {fmt_usd(anthropic_data['total_cost_usd']):>10}"
+        )
+        if days > 0 and t["api_calls"] > 0:
+            daily = anthropic_data["total_cost_usd"] / days
+            print(f"\n  Daily rate : {fmt_usd(daily)}/day")
+            print(f"  Projected  : {fmt_usd(daily * 30)}/month")
+
     # ── External services (static/free tier) ─────────────────────────────────
-    print_section("External Services")
+    print_section("Other Services")
 
     ext_services = [
-        ("Anthropic Claude API",   "Pay-per-token", "~$1–40/month (usage-based)"),
         ("Alpaca (paper trading)", "Free",           "$0.00"),
         ("Brave Search API",       "Free (2K req)",  "$0.00"),
         ("ngrok",                  "Free tier",      "$0.00"),
@@ -234,22 +337,33 @@ def run_report(days: int) -> None:
     for name, tier, cost in ext_services:
         print(f"  {name:<35} {tier:<20} {cost}")
 
-    print(f"\n  Note: Anthropic cost depends on query volume.")
-    print(f"        ~$0.01–0.08 per analyze/research call (Sonnet 4.6)")
-    print(f"        Use 'make test' to avoid accidental API calls in dev.")
-
     # ── Summary ───────────────────────────────────────────────────────────────
     print_section("Summary")
     print()
-    print(f"  {'Service':<35} {'Est. Monthly':>12}")
-    print(f"  {'─' * 48}")
-    print(f"  {'Azure (all resources)':<35} {'$13–26':>12}")
-    print(f"  {'Anthropic API (light use)':<35} {'$1–5':>12}")
-    print(f"  {'Anthropic API (moderate use)':<35} {'$5–20':>12}")
-    print(f"  {'All other services':<35} {'$0':>12}")
-    print(f"  {'─' * 48}")
-    print(f"  {'TOTAL (light use)':<35} {'~$14–31':>12}")
-    print(f"  {'TOTAL (moderate use)':<35} {'~$18–46':>12}")
+
+    anthropic_cost = anthropic_data.get("total_cost_usd", 0)
+    has_actual_anthropic = (
+        "error" not in anthropic_data
+        and anthropic_data.get("totals", {}).get("api_calls", 0) > 0
+    )
+    anthropic_label = (
+        f"Actual ({days}d)" if has_actual_anthropic else "Estimated range"
+    )
+    anthropic_value = (
+        fmt_usd(anthropic_cost) if has_actual_anthropic else "$1–40"
+    )
+
+    print(f"  {'Service':<35} {'Amount':>12}  {'Note'}")
+    print(f"  {'─' * 62}")
+    print(f"  {'Azure (all resources)':<35} {'$13–26':>12}  estimated (free tier active)")
+    print(f"  {'Anthropic API':<35} {anthropic_value:>12}  {anthropic_label}")
+    print(f"  {'All other services':<35} {'$0':>12}  free tier")
+    print(f"  {'─' * 62}")
+
+    if has_actual_anthropic and days > 0:
+        projected_anthropic = anthropic_cost / days * 30
+        print(f"  {'Anthropic projected/month':<35} {fmt_usd(projected_anthropic):>12}")
+    print()
     print()
     print("━" * 55)
     print()

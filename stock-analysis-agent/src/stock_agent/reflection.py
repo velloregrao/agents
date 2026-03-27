@@ -12,6 +12,7 @@ from stock_agent.memory import (
     get_lessons,
     store_lessons,
     get_performance_summary,
+    log_token_usage,
 )
 
 load_dotenv()
@@ -88,6 +89,12 @@ Your goal is to extract specific, actionable, and falsifiable trading rules from
         max_tokens=1024,
         messages=[{"role": "user", "content": prompt}]
     )
+    log_token_usage(
+        call_type="reflect",
+        model=response.model,
+        input_tokens=response.usage.input_tokens,
+        output_tokens=response.usage.output_tokens,
+    )
 
     # Parse Claude's response
     try:
@@ -157,6 +164,12 @@ Example: ["lesson 1", "lesson 2"]
         model="claude-sonnet-4-6",
         max_tokens=512,
         messages=[{"role": "user", "content": prompt}]
+    )
+    log_token_usage(
+        call_type="reflect",
+        model=response.model,
+        input_tokens=response.usage.input_tokens,
+        output_tokens=response.usage.output_tokens,
     )
 
     try:
