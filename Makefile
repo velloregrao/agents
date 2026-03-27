@@ -4,8 +4,8 @@
 # ─────────────────────────────────────────────────────────────────────────────
 
 .PHONY: help setup setup-python setup-bot test test-python test-bot test-integration \
-        dev-api dev-bot dev verify \
-        local-api docker-local docker-local-down deploy \
+        dev dev-stop dev-api dev-bot kill-api kill-bot verify \
+        docker-local docker-local-down deploy \
         logs-azure-bot logs-azure-api logs-local \
         clean check-env
 
@@ -34,8 +34,10 @@ help:
 	@echo "  test-integration  Run integration tests (hits real APIs)"
 	@echo ""
 	@echo "Local Dev"
-	@echo "  dev-api        Start Python API locally with hot reload"
-	@echo "  dev-bot        Start Teams bot locally"
+	@echo "  dev            Start both API and bot, tail logs in one terminal"
+	@echo "  dev-stop       Stop both services started by 'make dev'"
+	@echo "  dev-api        Start Python API only (foreground)"
+	@echo "  dev-bot        Start Teams bot only (foreground)"
 	@echo "  docker-local   Run full stack in Docker (pre-Azure validation)"
 	@echo ""
 	@echo "Verify"
@@ -100,14 +102,64 @@ test-integration:
 
 # ── Local Dev ─────────────────────────────────────────────────────────────────
 
-dev-api:
+kill-api:
+	@lsof -ti :8000 | xargs kill 2>/dev/null && echo "✅ Port 8000 freed" || echo "ℹ️  Nothing running on port 8000"
+
+kill-bot:
+	@lsof -ti :3978 | xargs kill 2>/dev/null && echo "✅ Port 3978 freed" || echo "ℹ️  Nothing running on port 3978"
+
+dev: kill-api kill-bot
+	@echo "→ Starting Python API and Teams bot..."
+	@echo "   Logs below — press Ctrl+C to stop both"
+	@echo ""
+	@mkdir -p /tmp/agents-dev
+	@# Start API in background, log to file
+	@cd $(API_DIR) && \
+	  set -a && . .env && set +a && \
+	  $(UVICORN) stock_agent.api:app --host 127.0.0.1 --port 8000 --reload \
+	  > /tmp/agents-dev/api.log 2>&1 & echo $$! > /tmp/agents-dev/api.pid
+	@# Wait for API to be ready
+	@echo "→ Waiting for API to start..."
+	@for i in 1 2 3 4 5 6 7 8 9 10; do \
+	  curl -sf http://127.0.0.1:8000/health > /dev/null 2>&1 && break; \
+	  sleep 1; \
+	done
+	@curl -sf http://127.0.0.1:8000/health > /dev/null 2>&1 \
+	  && echo "✅ API ready on http://127.0.0.1:8000" \
+	  || (echo "❌ API failed to start — check logs:" && cat /tmp/agents-dev/api.log && exit 1)
+	@# Start bot in background, log to file
+	@cd $(BOT_DIR) && \
+	  PYTHON_API_URL=http://127.0.0.1:8000 \
+	  BOT_ID=$$(grep BOT_ID ../.env | cut -d= -f2) \
+	  BOT_PASSWORD=$$(grep BOT_PASSWORD ../.env | cut -d= -f2) \
+	  npm start \
+	  > /tmp/agents-dev/bot.log 2>&1 & echo $$! > /tmp/agents-dev/bot.pid
+	@echo "✅ Bot ready on port 3978"
+	@echo ""
+	@echo "─────────────────────────────────────"
+	@echo " API logs  → tail -f /tmp/agents-dev/api.log"
+	@echo " Bot logs  → tail -f /tmp/agents-dev/bot.log"
+	@echo " Stop all  → make dev-stop"
+	@echo "─────────────────────────────────────"
+	@echo ""
+	@# Tail both logs interleaved until Ctrl+C
+	@trap 'make dev-stop' INT; tail -f /tmp/agents-dev/api.log /tmp/agents-dev/bot.log
+
+dev-stop:
+	@echo "→ Stopping all dev services..."
+	@test -f /tmp/agents-dev/api.pid && kill $$(cat /tmp/agents-dev/api.pid) 2>/dev/null || true
+	@test -f /tmp/agents-dev/bot.pid && kill $$(cat /tmp/agents-dev/bot.pid) 2>/dev/null || true
+	@rm -rf /tmp/agents-dev
+	@echo "✅ All dev services stopped"
+
+dev-api: kill-api
 	@echo "→ Starting Python API on http://127.0.0.1:8000 (hot reload on)"
 	@echo "   Press Ctrl+C to stop"
 	cd $(API_DIR) && \
 	  set -a && . .env && set +a && \
 	  $(UVICORN) stock_agent.api:app --host 127.0.0.1 --port 8000 --reload
 
-dev-bot:
+dev-bot: kill-bot
 	@echo "→ Starting Teams bot on port 3978"
 	@echo "   Make sure 'make dev-api' is running in another terminal"
 	@echo "   Press Ctrl+C to stop"
