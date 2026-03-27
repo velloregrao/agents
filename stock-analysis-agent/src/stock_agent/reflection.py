@@ -161,7 +161,7 @@ Example: ["lesson 1", "lesson 2"]
 """
 
     response = client.messages.create(
-        model="claude-sonnet-4-6",
+        model="claude-haiku-4-5-20251001",   # filtering/classification task — Haiku is sufficient
         max_tokens=512,
         messages=[{"role": "user", "content": prompt}]
     )

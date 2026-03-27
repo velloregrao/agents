@@ -8,12 +8,16 @@ Public surface:
 Legacy per-intent endpoints (/analyze, /trade, /research, /portfolio, /reflect,
 /monitor) are retained for direct API testing but are no longer called by any
 channel adapter.
+
+Routing architecture (Phase 2+):
+    /agent delegates all classification and dispatch to orchestrator/router.py,
+    which uses Claude Haiku for intent detection (fast, cheap) with a regex
+    fallback, then fans out to the correct agent pipeline.
 """
 
 import os
-import re
-import sys
 import json
+import sys
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -39,13 +43,15 @@ from stock_agent.memory import (
 from stock_agent.agent import run_analysis
 from stock_agent.trading_agent import run_trading_agent, monitor_positions
 from stock_agent.reflection import reflect
-from stock_agent.alpaca_tools import place_order, close_position
-from stock_agent.memory import get_recent_trades, get_lessons
+from stock_agent.research import run_research_orchestrator
 
 # Make orchestrator/ importable from api.py
-# (agents root is 3 levels above this file)
+# (agents root is 3 levels above this file: src/stock_agent/api.py → agents/)
 _AGENTS_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 sys.path.insert(0, str(_AGENTS_ROOT))
+
+from orchestrator.router import route as _route
+from orchestrator.contracts import AgentMessage
 
 app = FastAPI(title="Stock Trading Agent API", version="1.0.0")
 
@@ -169,78 +175,7 @@ def do_monitor():
 
 
 # ── Research endpoint (multi-agent orchestrator) ──────────────────────────────
-
-ORCHESTRATOR_TOOLS = [
-    {"name": "get_stock_info", "description": "Get company overview, sector, market cap.", "input_schema": {"type": "object", "properties": {"ticker": {"type": "string"}}, "required": ["ticker"]}},
-    {"name": "get_current_price", "description": "Get live price, volume, intraday change.", "input_schema": {"type": "object", "properties": {"ticker": {"type": "string"}}, "required": ["ticker"]}},
-    {"name": "get_technical_indicators", "description": "Get RSI, MACD, Bollinger Bands, SMA20, SMA50.", "input_schema": {"type": "object", "properties": {"ticker": {"type": "string"}, "period": {"type": "string", "default": "6mo"}}, "required": ["ticker"]}},
-    {"name": "get_fundamentals", "description": "Get P/E, revenue, margins, analyst ratings.", "input_schema": {"type": "object", "properties": {"ticker": {"type": "string"}}, "required": ["ticker"]}},
-    {"name": "get_account_balance", "description": "Get Alpaca paper account balance and buying power.", "input_schema": {"type": "object", "properties": {}}},
-    {"name": "get_positions", "description": "Get all open positions.", "input_schema": {"type": "object", "properties": {}}},
-    {"name": "get_open_trades", "description": "Get open trades from memory.", "input_schema": {"type": "object", "properties": {}}},
-    {"name": "get_lessons", "description": "Get lessons from past trades.", "input_schema": {"type": "object", "properties": {"ticker": {"type": "string"}, "sector": {"type": "string"}}}},
-    {"name": "get_performance_summary", "description": "Get overall trading performance summary.", "input_schema": {"type": "object", "properties": {}}},
-]
-
-ORCHESTRATOR_SYSTEM = """You are an expert stock trading orchestrator managing a paper trading portfolio.
-
-Your decision-making process for ANY research request:
-1. ALWAYS call get_positions AND get_open_trades first — explicitly state whether the user currently holds this stock
-2. Check get_lessons for past lessons on this ticker/sector
-3. ALWAYS check get_account_balance before any trade recommendation
-4. Get technical indicators AND fundamentals before recommending
-5. Apply position sizing: max 5% of portfolio per trade
-
-Output format:
-- Start with "📦 Current Position: You hold X shares of TICKER" or "📦 Current Position: None"
-- Then lead with BUY / HOLD / SELL decision
-- Show key data points that drove the decision
-- Reference specific past lessons if applicable
-- If recommending a trade: show exact quantity and position size as % of portfolio
-- Flag risks clearly
-- Note: for informational purposes only, not financial advice"""
-
-def _handle_orchestrator_tool(name: str, inputs: dict) -> str:
-    try:
-        if name == "get_stock_info":         return json.dumps(get_stock_info(inputs["ticker"]))
-        elif name == "get_current_price":    return json.dumps(get_current_price(inputs["ticker"]))
-        elif name == "get_technical_indicators": return json.dumps(get_technical_indicators(inputs["ticker"], inputs.get("period", "6mo")))
-        elif name == "get_fundamentals":     return json.dumps(get_fundamentals(inputs["ticker"]))
-        elif name == "get_account_balance":  return json.dumps(get_account_balance())
-        elif name == "get_positions":        return json.dumps(get_positions())
-        elif name == "get_open_trades":      return json.dumps(get_open_trades())
-        elif name == "get_lessons":          return json.dumps(get_lessons(ticker=inputs.get("ticker"), sector=inputs.get("sector")))
-        elif name == "get_performance_summary": return json.dumps(get_performance_summary())
-        else: return json.dumps({"error": f"Unknown tool: {name}"})
-    except Exception as e:
-        return json.dumps({"error": str(e)})
-
-def run_research_orchestrator(ticker: str, user_request: str) -> str:
-    """
-    Agentic research loop: Claude calls tools until it has enough data
-    to produce a full buy/hold/sell recommendation.
-    Extracted from the /research endpoint so it can be reused by
-    orchestrator/router.py in Phase 2.
-    """
-    messages = [{"role": "user", "content": user_request}]
-    while True:
-        response = _client.messages.create(
-            model="claude-sonnet-4-6",
-            max_tokens=4096,
-            system=ORCHESTRATOR_SYSTEM,
-            tools=ORCHESTRATOR_TOOLS,
-            messages=messages,
-        )
-        tool_calls = [b for b in response.content if b.type == "tool_use"]
-        if response.stop_reason == "end_turn":
-            return " ".join(b.text for b in response.content if b.type == "text")
-        tool_results = []
-        for tc in tool_calls:
-            result = _handle_orchestrator_tool(tc.name, tc.input)
-            tool_results.append({"type": "tool_result", "tool_use_id": tc.id, "content": result})
-        messages.append({"role": "assistant", "content": response.content})
-        messages.append({"role": "user", "content": tool_results})
-
+# Implementation lives in stock_agent/research.py — imported at top of file.
 
 @app.post("/research")
 def research(req: ResearchRequest):
@@ -252,155 +187,9 @@ def research(req: ResearchRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# ── Intent routing (ported from teamsBot.ts parseIntent) ─────────────────────
-# Phase 2 will replace this regex approach with Claude Haiku classification.
-
-_SKIP_WORDS = {
-    "ANALYZE", "ANALYSIS", "STOCK", "SHARE", "PRICE", "GET", "SHOW",
-    "TELL", "WHAT", "HOW", "IS", "THE", "FOR", "ME", "TRADE", "TRADES",
-    "BUY", "SELL", "PORTFOLIO", "PERFORMANCE", "REFLECT", "REFLECTION",
-    "MONITOR", "POSITIONS", "HELP", "HI", "HELLO", "AND", "ON", "A",
-    "RUN", "CHECK", "MY",
-}
-
-def _parse_intent(text: str) -> tuple[str, list[str]]:
-    """Classify intent and extract ticker symbols from raw user text."""
-    upper = text.upper()
-    words = re.sub(r"[^A-Z\s]", "", upper).split()
-    tickers = [w for w in words if 1 <= len(w) <= 5 and w not in _SKIP_WORDS]
-
-    if re.match(r"^(hi|hello|hey|help)$", text.strip(), re.IGNORECASE):
-        return "help", []
-    if re.search(r"monitor|check\s+positions|review\s+positions", text, re.IGNORECASE):
-        return "monitor", []
-    if re.search(r"portfolio|positions|holdings", text, re.IGNORECASE):
-        return "portfolio", tickers
-    if re.search(r"performance|stats|statistics|pnl|profit", text, re.IGNORECASE):
-        return "portfolio", tickers
-    if re.search(r"reflect|reflection|lessons|learn", text, re.IGNORECASE):
-        return "reflect", []
-    if re.search(r"research|deep.?dive|full.?analysis|recommend", text, re.IGNORECASE) and tickers:
-        return "research", tickers
-    if re.search(r"trade|buy|sell|invest|run\s+agent", text, re.IGNORECASE) and tickers:
-        return "trade", tickers
-    if tickers:
-        return "analyze", tickers
-    return "unknown", []
-
-
-# ── Portfolio formatter (ported from teamsBot.ts getPortfolio) ────────────────
-
-def _format_portfolio() -> str:
-    """Fetch portfolio data and return markdown-formatted summary."""
-    balance  = get_account_balance()
-    pos_data = get_positions()
-    perf     = get_performance_summary()
-
-    if balance.get("error"):
-        return f"❌ Alpaca API error: {balance['error']}"
-
-    def fmt(n) -> str:
-        try:
-            return f"{float(n):,.2f}"
-        except (TypeError, ValueError):
-            return "N/A"
-
-    positions = pos_data.get("positions", [])
-
-    lines = [
-        "## 📊 Portfolio Status\n",
-        f"**Cash:** ${fmt(balance.get('cash'))}  "
-        f"**Portfolio Value:** ${fmt(balance.get('portfolio_value'))}  "
-        f"**Buying Power:** ${fmt(balance.get('buying_power'))}\n",
-    ]
-
-    if positions:
-        lines.append("### Open Positions")
-        for p in positions:
-            pnl     = float(p.get("unrealized_pnl") or 0)
-            pnl_pct = float(p.get("unrealized_pnl_pct") or 0)
-            emoji   = "📈" if pnl >= 0 else "📉"
-            sign    = "+" if pnl >= 0 else ""
-            lines.append(
-                f"- **{p['ticker']}**: {p['quantity']} shares "
-                f"@ ${fmt(p.get('entry_price'))} | "
-                f"Current: ${fmt(p.get('current_price'))} | "
-                f"{emoji} {sign}${pnl:.2f} ({pnl_pct:.1f}%)"
-            )
-    else:
-        lines.append("### No open positions")
-
-    if perf.get("total_trades", 0) > 0:
-        lines += [
-            "\n### Performance",
-            f"- **Total Trades:** {perf['total_trades']}",
-            f"- **Win Rate:** {perf.get('win_rate')}%",
-            f"- **Total P&L:** ${perf.get('total_pnl')}",
-            f"- **Avg Return:** {perf.get('avg_return_pct')}%",
-        ]
-
-    return "\n".join(lines)
-
-
-# ── Intent dispatcher ─────────────────────────────────────────────────────────
-
-def _dispatch(intent: str, tickers: list[str], raw_text: str) -> str:
-    """Route a classified intent to the correct agent pipeline."""
-    if intent == "help":
-        return (
-            "## 🤖 Stock Trading Agent\n\n"
-            "**Commands:**\n"
-            "- **Analyze AAPL** — Quick stock analysis\n"
-            "- **Research NVDA** — Deep multi-agent research (news + technicals + memory)\n"
-            "- **Trade AAPL MSFT TSLA** — Run trading agent on watchlist\n"
-            "- **Portfolio** — Show positions and balance\n"
-            "- **Reflect** — Extract lessons from trade history\n"
-            "- **Monitor** — Review open positions for exits\n\n"
-            "*Powered by Claude + Alpaca paper trading*"
-        )
-
-    if intent == "analyze" and tickers:
-        return run_analysis(tickers[0])
-
-    if intent == "research" and tickers:
-        user_request = raw_text or f"Research {tickers[0]} and give me a detailed buy/hold/sell recommendation"
-        return run_research_orchestrator(tickers[0], user_request)
-
-    if intent == "trade" and tickers:
-        return run_trading_agent(tickers, raw_text or None)
-
-    if intent == "portfolio":
-        return _format_portfolio()
-
-    if intent == "reflect":
-        result = reflect(min_trades=1)
-        if result.get("status") == "skipped":
-            return f"⚠️ {result['reason']}"
-        lines = [
-            "## 🧠 Reflection Complete\n",
-            f"**Trades Analyzed:** {result.get('trades_analyzed')}",
-            f"**Lessons Extracted:** {result.get('lessons_extracted')}\n",
-            "### New Lessons",
-        ]
-        for i, lesson in enumerate(result.get("lessons", []), 1):
-            lines.append(f"{i}. {lesson}")
-        lines.append(f"\n### Summary\n{result.get('summary', '')}")
-        return "\n".join(lines)
-
-    if intent == "monitor":
-        return monitor_positions()
-
-    return (
-        "I didn't understand that. Try:\n"
-        "- **Analyze AAPL**\n"
-        "- **Trade AAPL MSFT**\n"
-        "- **Portfolio**\n"
-        "- **Reflect**\n"
-        "- **Monitor**"
-    )
-
-
 # ── /agent — single platform-agnostic endpoint ────────────────────────────────
+# All routing and classification now lives in orchestrator/router.py.
+# This endpoint is a thin HTTP adapter: deserialise → AgentMessage → route() → serialise.
 
 class AgentRequest(BaseModel):
     user_id:   str
@@ -412,21 +201,33 @@ class AgentRequest(BaseModel):
 class AgentResponseModel(BaseModel):
     intent:            str
     text:              str
-    requires_approval: bool       = False
+    requires_approval: bool        = False
     approval_context:  dict | None = None
 
 @app.post("/agent", response_model=AgentResponseModel)
 def agent_endpoint(req: AgentRequest):
     """
     Single entry point for all channel adapters.
-    Receives a normalised AgentMessage, returns a normalised AgentResponse.
-    Phase 2 will replace _parse_intent() with Claude Haiku classification
-    inside orchestrator/router.py.
+
+    Constructs a normalised AgentMessage and delegates entirely to
+    orchestrator/router.route(), which handles Haiku classification,
+    regex fallback, and pipeline dispatch.
     """
     try:
-        intent, tickers = _parse_intent(req.text)
-        text = _dispatch(intent, tickers, req.text)
-        return AgentResponseModel(intent=intent, text=text)
+        msg = AgentMessage(
+            user_id=req.user_id,
+            platform=req.platform,
+            text=req.text,
+            thread_id=req.thread_id,
+            timestamp=req.timestamp,
+        )
+        resp = _route(msg)
+        return AgentResponseModel(
+            intent=resp.intent,
+            text=resp.text,
+            requires_approval=resp.requires_approval,
+            approval_context=resp.approval_context,
+        )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
