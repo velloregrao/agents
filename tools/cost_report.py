@@ -23,7 +23,7 @@ SUBSCRIPTION_ID = os.getenv("AZURE_SUBSCRIPTION_ID", "")
 RESOURCE_GROUP = os.getenv("AZURE_RESOURCE_GROUP", "stock-bot-rg")
 DB_PATH = os.getenv(
     "DB_PATH",
-    str(Path(__file__).parents[1] / "stock-analysis-agent" / "trading_memory.db"),
+    str(Path.home() / "Projects" / "data" / "trading_memory.db"),
 )
 
 
