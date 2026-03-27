@@ -138,7 +138,7 @@ export class TeamsBot extends TeamsActivityHandler {
         switch (intent) {
           case "help":
             await context.sendActivity(
-              "## 🤖 Stock Trading Agent\n\n" +
+              "## 🤖 Stock Trading Agent v2\n\n" +
               "**Commands:**\n" +
               "- **Analyze AAPL** — Quick stock analysis\n" +
               "- **Research NVDA** — Deep multi-agent research (news + technicals + memory)\n" +
