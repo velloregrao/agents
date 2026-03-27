@@ -74,9 +74,13 @@ def test_analyze_missing_ticker(client):
 
 # ── Research ──────────────────────────────────────────────────────────────────
 
-@patch("stock_agent.api._client")
+@patch("stock_agent.research._client")
 def test_research_agentic_loop_completes(mock_claude):
-    """Simulate two turns: tool call then end_turn."""
+    """Simulate two turns: tool call then end_turn.
+
+    Patches target stock_agent.research (where run_research_orchestrator
+    and its _client live) rather than stock_agent.api.
+    """
     # Turn 1: model calls get_positions
     tool_block = MagicMock()
     tool_block.type = "tool_use"
@@ -99,7 +103,7 @@ def test_research_agentic_loop_completes(mock_claude):
 
     mock_claude.messages.create.side_effect = [turn1, turn2]
 
-    with patch("stock_agent.api.get_positions", return_value={"positions": []}):
+    with patch("stock_agent.research.get_positions", return_value={"positions": []}):
         from stock_agent.api import app
         from fastapi.testclient import TestClient
         response = TestClient(app).post("/research", json={"ticker": "AAPL"})
