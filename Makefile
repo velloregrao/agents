@@ -4,7 +4,7 @@
 # ─────────────────────────────────────────────────────────────────────────────
 
 .PHONY: help setup setup-python setup-bot test test-python test-bot test-integration \
-        dev dev-stop dev-api dev-bot kill-api kill-bot verify \
+        dev dev-bg dev-stop dev-api dev-bot kill-api kill-bot verify \
         docker-local docker-local-down deploy \
         logs-azure-bot logs-azure-api logs-local \
         clean check-env
@@ -34,8 +34,9 @@ help:
 	@echo "  test-integration  Run integration tests (hits real APIs)"
 	@echo ""
 	@echo "Local Dev"
-	@echo "  dev            Start both API and bot, tail logs in one terminal"
-	@echo "  dev-stop       Stop both services started by 'make dev'"
+	@echo "  dev            Start both, tail logs in terminal (Ctrl+C to stop)"
+	@echo "  dev-bg         Start both in background, return to prompt"
+	@echo "  dev-stop       Stop all background services"
 	@echo "  dev-api        Start Python API only (foreground)"
 	@echo "  dev-bot        Start Teams bot only (foreground)"
 	@echo "  docker-local   Run full stack in Docker (pre-Azure validation)"
@@ -145,6 +146,35 @@ dev: kill-api kill-bot
 	@echo ""
 	@# Tail both logs interleaved until Ctrl+C
 	@trap 'make dev-stop' INT; tail -f /tmp/agents-dev/api.log /tmp/agents-dev/bot.log
+
+dev-bg: kill-api kill-bot
+	@mkdir -p /tmp/agents-dev
+	@cd $(API_DIR) && \
+	  set -a && . .env && set +a && \
+	  $(UVICORN) stock_agent.api:app --host 127.0.0.1 --port 8000 --reload \
+	  > /tmp/agents-dev/api.log 2>&1 & echo $$! > /tmp/agents-dev/api.pid
+	@echo "→ Waiting for API to start..."
+	@for i in 1 2 3 4 5 6 7 8 9 10; do \
+	  curl -sf http://127.0.0.1:8000/health > /dev/null 2>&1 && break; \
+	  sleep 1; \
+	done
+	@curl -sf http://127.0.0.1:8000/health > /dev/null 2>&1 \
+	  && echo "✅ API ready on http://127.0.0.1:8000" \
+	  || (echo "❌ API failed to start — check logs: tail -f /tmp/agents-dev/api.log" && exit 1)
+	@cd $(BOT_DIR) && \
+	  PYTHON_API_URL=http://127.0.0.1:8000 \
+	  BOT_ID=$$(grep ^BOT_ID ../.env | cut -d= -f2) \
+	  BOT_PASSWORD=$$(grep ^BOT_PASSWORD ../.env | cut -d= -f2) \
+	  BOT_TENANT_ID=$$(grep ^BOT_TENANT_ID ../.env | cut -d= -f2) \
+	  npm start \
+	  > /tmp/agents-dev/bot.log 2>&1 & echo $$! > /tmp/agents-dev/bot.pid
+	@echo "✅ Bot ready on port 3978"
+	@echo ""
+	@echo "─────────────────────────────────────"
+	@echo " API logs  → tail -f /tmp/agents-dev/api.log"
+	@echo " Bot logs  → tail -f /tmp/agents-dev/bot.log"
+	@echo " Stop all  → make dev-stop"
+	@echo "─────────────────────────────────────"
 
 dev-stop:
 	@echo "→ Stopping all dev services..."
