@@ -1,17 +1,122 @@
-# ─────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
 # Stock Copilot Agent — Developer Commands
-# ─────────────────────────────────────────────
+# Usage: make <target>
+# ─────────────────────────────────────────────────────────────────────────────
 
-# Mode 1: Local debug (no Docker)
-# Start Python API locally, then press F5 in VS Code for bot
-local-api:
-	cd stock-analysis-agent && \
-	ANTHROPIC_API_KEY=$$(grep ANTHROPIC_API_KEY .env | cut -d= -f2) \
-	ALPACA_API_KEY=$$(grep ALPACA_API_KEY .env | cut -d= -f2) \
-	ALPACA_API_SECRET=$$(grep ALPACA_API_SECRET .env | cut -d= -f2) \
-	.venv/bin/uvicorn stock_agent.api:app --host 127.0.0.1 --port 8000 --reload
+.PHONY: help setup setup-python setup-bot test test-python test-bot test-integration \
+        dev-api dev-bot dev verify \
+        local-api docker-local docker-local-down deploy \
+        logs-azure-bot logs-azure-api logs-local \
+        clean check-env
 
-# Mode 2: Local Docker (pre-Azure validation)
+PYTHON     := $(PWD)/stock-analysis-agent/.venv/bin/python3
+UVICORN    := $(PWD)/stock-analysis-agent/.venv/bin/uvicorn
+BOT_DIR    := stock-copilot-agent
+API_DIR    := stock-analysis-agent
+ACR        := stockbotregkava.azurecr.io
+RG         := stock-bot-rg
+
+# ── Help ──────────────────────────────────────────────────────────────────────
+
+help:
+	@echo ""
+	@echo "Usage: make <target>"
+	@echo ""
+	@echo "Setup"
+	@echo "  setup          Full setup from scratch (Python + Node)"
+	@echo "  setup-python   Set up Python API virtual environment"
+	@echo "  setup-bot      Install Node deps and compile TypeScript"
+	@echo ""
+	@echo "Tests"
+	@echo "  test           Run all unit + functional tests (Python + TypeScript)"
+	@echo "  test-python    Run Python tests only"
+	@echo "  test-bot       Run TypeScript tests only"
+	@echo "  test-integration  Run integration tests (hits real APIs)"
+	@echo ""
+	@echo "Local Dev"
+	@echo "  dev-api        Start Python API locally with hot reload"
+	@echo "  dev-bot        Start Teams bot locally"
+	@echo "  docker-local   Run full stack in Docker (pre-Azure validation)"
+	@echo ""
+	@echo "Verify"
+	@echo "  verify         Check Python API health after startup"
+	@echo ""
+	@echo "Deploy"
+	@echo "  deploy         Build, push and deploy both services to Azure"
+	@echo ""
+	@echo "Logs"
+	@echo "  logs-azure-api  Tail Python API logs from Azure"
+	@echo "  logs-azure-bot  Tail Teams bot logs from Azure"
+	@echo "  logs-local      Tail Docker Compose logs"
+	@echo ""
+	@echo "Cleanup"
+	@echo "  clean          Remove virtual env, node_modules, compiled output"
+	@echo ""
+
+# ── Setup ─────────────────────────────────────────────────────────────────────
+
+setup: check-env setup-python setup-bot
+	@echo ""
+	@echo "✅ Setup complete. Run 'make test' to verify."
+
+setup-python:
+	@echo "→ Setting up Python virtual environment..."
+	cd $(API_DIR) && uv venv
+	cd $(API_DIR) && uv pip install --python .venv/bin/python3 -e ".[test]"
+	@echo "✅ Python environment ready"
+
+setup-bot:
+	@echo "→ Installing Node dependencies..."
+	cd $(BOT_DIR) && npm install
+	@echo "→ Compiling TypeScript..."
+	cd $(BOT_DIR) && npm run build
+	@echo "✅ Bot ready"
+
+check-env:
+	@echo "→ Checking prerequisites..."
+	@command -v uv     >/dev/null 2>&1 || (echo "❌ uv not found. Install: brew install uv" && exit 1)
+	@command -v node   >/dev/null 2>&1 || (echo "❌ node not found. Run: nvm use 18" && exit 1)
+	@command -v docker >/dev/null 2>&1 || (echo "❌ docker not found. Install Docker Desktop" && exit 1)
+	@test -f $(API_DIR)/.env         || (echo "❌ Missing $(API_DIR)/.env — copy from $(API_DIR)/.env.example" && exit 1)
+	@echo "✅ Prerequisites OK"
+
+# ── Tests ─────────────────────────────────────────────────────────────────────
+
+test: test-python test-bot
+	@echo ""
+	@echo "✅ All tests passed"
+
+test-python:
+	@echo "→ Running Python unit + functional tests..."
+	cd $(API_DIR) && $(PYTHON) -m pytest tests/unit tests/functional -v
+
+test-bot:
+	@echo "→ Running TypeScript tests..."
+	cd $(BOT_DIR) && npm test
+
+test-integration:
+	@echo "→ Running integration tests (hitting real APIs)..."
+	cd $(API_DIR) && $(PYTHON) -m pytest --integration -v
+
+# ── Local Dev ─────────────────────────────────────────────────────────────────
+
+dev-api:
+	@echo "→ Starting Python API on http://127.0.0.1:8000 (hot reload on)"
+	@echo "   Press Ctrl+C to stop"
+	cd $(API_DIR) && \
+	  set -a && . .env && set +a && \
+	  $(UVICORN) stock_agent.api:app --host 127.0.0.1 --port 8000 --reload
+
+dev-bot:
+	@echo "→ Starting Teams bot on port 3978"
+	@echo "   Make sure 'make dev-api' is running in another terminal"
+	@echo "   Press Ctrl+C to stop"
+	cd $(BOT_DIR) && \
+	  PYTHON_API_URL=http://127.0.0.1:8000 \
+	  BOT_ID=$$(grep BOT_ID ../.env | cut -d= -f2) \
+	  BOT_PASSWORD=$$(grep BOT_PASSWORD ../.env | cut -d= -f2) \
+	  npm start
+
 docker-local:
 	docker compose -f docker-compose.yml -f docker-compose.local.yml \
 	  --env-file .env up --build
@@ -19,36 +124,54 @@ docker-local:
 docker-local-down:
 	docker compose -f docker-compose.yml -f docker-compose.local.yml down
 
-# Mode 3: Deploy to Azure
-deploy:
-	@echo "Building bot TypeScript..."
-	cd stock-copilot-agent && npm run build
-	@echo "Building and pushing images..."
-	docker build --platform linux/amd64 \
-	  -t stockbotregkava.azurecr.io/python-api:latest \
-	  ./stock-analysis-agent
-	docker build --platform linux/amd64 \
-	  -t stockbotregkava.azurecr.io/bot:latest \
-	  ./stock-copilot-agent
-	docker push stockbotregkava.azurecr.io/python-api:latest
-	docker push stockbotregkava.azurecr.io/bot:latest
-	@echo "Restarting Azure containers..."
-	az containerapp update --name python-api \
-	  --resource-group stock-bot-rg \
-	  --image stockbotregkava.azurecr.io/python-api:latest
-	az containerapp update --name stock-bot \
-	  --resource-group stock-bot-rg \
-	  --image stockbotregkava.azurecr.io/bot:latest
-	@echo "Deploy complete ✅"
+# ── Verify ────────────────────────────────────────────────────────────────────
 
-# Logs
-logs-azure-bot:
-	az containerapp logs show --name stock-bot \
-	  --resource-group stock-bot-rg --tail 50 --follow
+verify:
+	@echo "→ Checking Python API health..."
+	@curl -sf http://127.0.0.1:8000/health | python3 -m json.tool \
+	  && echo "✅ API is healthy" \
+	  || echo "❌ API not responding — is 'make dev-api' running?"
+
+# ── Deploy ────────────────────────────────────────────────────────────────────
+
+deploy:
+	@echo "→ Running tests before deploy..."
+	$(MAKE) test
+	@echo "→ Logging in to ACR..."
+	az acr login --name stockbotregkava
+	@echo "→ Building images..."
+	docker build --platform linux/amd64 -t $(ACR)/python-api:latest ./$(API_DIR)
+	docker build --platform linux/amd64 -t $(ACR)/bot:latest ./$(BOT_DIR)
+	@echo "→ Pushing images..."
+	docker push $(ACR)/python-api:latest
+	docker push $(ACR)/bot:latest
+	@echo "→ Deploying to Azure Container Apps..."
+	az containerapp update --name python-api --resource-group $(RG) \
+	  --image $(ACR)/python-api:latest \
+	  --set-env-vars "DEPLOYED_AT=$$(date +%s)"
+	az containerapp update --name stock-bot --resource-group $(RG) \
+	  --image $(ACR)/bot:latest \
+	  --set-env-vars "DEPLOYED_AT=$$(date +%s)"
+	@echo "✅ Deploy complete"
+
+# ── Logs ─────────────────────────────────────────────────────────────────────
 
 logs-azure-api:
 	az containerapp logs show --name python-api \
-	  --resource-group stock-bot-rg --tail 50 --follow
+	  --resource-group $(RG) --tail 50 --follow
+
+logs-azure-bot:
+	az containerapp logs show --name stock-bot \
+	  --resource-group $(RG) --tail 50 --follow
 
 logs-local:
 	docker compose -f docker-compose.yml -f docker-compose.local.yml logs -f
+
+# ── Clean ─────────────────────────────────────────────────────────────────────
+
+clean:
+	@echo "→ Removing Python virtual environment..."
+	rm -rf $(API_DIR)/.venv
+	@echo "→ Removing Node modules and compiled output..."
+	rm -rf $(BOT_DIR)/node_modules $(BOT_DIR)/lib
+	@echo "✅ Clean complete. Run 'make setup' to start fresh."
