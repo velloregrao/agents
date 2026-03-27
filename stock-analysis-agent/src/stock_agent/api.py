@@ -66,7 +66,7 @@ class ResearchRequest(BaseModel):
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "service": "stock-agent-api"}
+    return {"status": "ok", "service": "stock-agent-api", "version": "2"}
 
 
 # ── Analyze a single stock ────────────────────────────────────────────────────
