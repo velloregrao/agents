@@ -104,10 +104,10 @@ test-integration:
 # ── Local Dev ─────────────────────────────────────────────────────────────────
 
 kill-api:
-	@lsof -ti :8000 | xargs kill 2>/dev/null && echo "✅ Port 8000 freed" || echo "ℹ️  Nothing running on port 8000"
+	@lsof -ti :8000 | xargs kill -9 2>/dev/null; sleep 1 && echo "✅ Port 8000 freed" || echo "ℹ️  Nothing running on port 8000"
 
 kill-bot:
-	@lsof -ti :3978 | xargs kill 2>/dev/null && echo "✅ Port 3978 freed" || echo "ℹ️  Nothing running on port 3978"
+	@lsof -ti :3978 | xargs kill -9 2>/dev/null; sleep 1 && echo "✅ Port 3978 freed" || echo "ℹ️  Nothing running on port 3978"
 
 dev: kill-api kill-bot
 	@echo "→ Starting Python API and Teams bot..."
@@ -178,8 +178,8 @@ dev-bg: kill-api kill-bot
 
 dev-stop:
 	@echo "→ Stopping all dev services..."
-	@test -f /tmp/agents-dev/api.pid && kill $$(cat /tmp/agents-dev/api.pid) 2>/dev/null || true
-	@test -f /tmp/agents-dev/bot.pid && kill $$(cat /tmp/agents-dev/bot.pid) 2>/dev/null || true
+	@lsof -ti :8000 | xargs kill -9 2>/dev/null || true
+	@lsof -ti :3978 | xargs kill -9 2>/dev/null || true
 	@rm -rf /tmp/agents-dev
 	@echo "✅ All dev services stopped"
 
