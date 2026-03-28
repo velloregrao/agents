@@ -47,28 +47,49 @@ jobs:
 
       - name: Deploy to Azure Container Apps
         run: |
+          # Only DEPLOYED_AT is set here — all secrets (ANTHROPIC_API_KEY,
+          # ALPACA_API_KEY, ALPACA_API_SECRET) are stored as Container App
+          # secrets and referenced via secretRef. They survive image updates
+          # and are never overwritten by this workflow.
           az containerapp update \
             --name python-api \
             --resource-group stock-bot-rg \
             --image ${{ secrets.ACR_LOGIN_SERVER }}/python-api:${{ github.sha }} \
             --set-env-vars "DEPLOYED_AT=${{ github.run_id }}"
 
-      - name: Wait for container to become ready
-        run: sleep 30
-
-      - name: Post-deploy deep health check
+      - name: Post-deploy health gate
         run: |
-          FQDN=$(az containerapp show \
+          # python-api has internal ingress so we can't curl it from GitHub Actions.
+          # Instead we poll until Azure marks the latest revision as ready, which
+          # requires the container's startup probe to pass (see TODO below).
+          # If the revision never becomes ready within 3 minutes, fail the deploy.
+          #
+          # TODO: add a startup probe to the Container App definition that calls
+          # /health/deep — then "Running" state IS a deep health check.
+          REVISION=$(az containerapp show \
             --name python-api \
             --resource-group stock-bot-rg \
-            --query properties.configuration.ingress.fqdn \
+            --query properties.latestRevisionName \
             --output tsv)
-          URL="https://${FQDN}/health/deep"
-          echo "Probing ${URL}"
-          STATUS=$(curl -sf -o /tmp/health.json -w "%{http_code}" "${URL}")
-          echo "Response: $(cat /tmp/health.json)"
-          if [ "${STATUS}" != "200" ]; then
-            echo "❌ Deep health check returned ${STATUS} — deploy failed"
-            exit 1
-          fi
-          echo "✅ Deep health check passed"
+          echo "Waiting for revision ${REVISION} to become ready..."
+          for i in $(seq 1 18); do
+            READY=$(az containerapp show \
+              --name python-api \
+              --resource-group stock-bot-rg \
+              --query "properties.latestReadyRevisionName" \
+              --output tsv 2>/dev/null)
+            echo "  attempt ${i}/18 — ready revision: ${READY}"
+            if [ "${READY}" = "${REVISION}" ]; then
+              echo "✅ Revision ${REVISION} is ready"
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "❌ Revision ${REVISION} did not become ready within 3 minutes"
+          az containerapp revision show \
+            --name python-api \
+            --resource-group stock-bot-rg \
+            --revision "${REVISION}" \
+            --query "{state:properties.runningState,replicas:properties.replicas}" \
+            --output json
+          exit 1
