@@ -57,6 +57,7 @@ sys.path.insert(0, str(_AGENTS_ROOT))
 from orchestrator.router import route as _route
 from orchestrator.contracts import AgentMessage
 from orchestrator.approval_manager import get_pending, resolve as resolve_approval
+from orchestrator import scheduler as _scheduler
 from orchestrator.alert_manager import (
     initialize_db as initialize_alert_db,
     store_conversation_ref,
@@ -82,6 +83,12 @@ def startup():
     initialize_db()
     initialize_watchlist_db()
     initialize_alert_db()
+    _scheduler.start()
+
+
+@app.on_event("shutdown")
+def shutdown():
+    _scheduler.stop()
 
 
 # ── Request models ────────────────────────────────────────────────────────────
@@ -352,6 +359,114 @@ def agent_endpoint(req: AgentRequest):
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Watchlist scan endpoints (Phase 5.5) ─────────────────────────────────────
+
+class WatchlistScanRequest(BaseModel):
+    user_id:  str
+    tickers:  list[str]
+    equity:   float = 0.0
+
+
+def _serialise_monitor_results(results) -> list[dict]:
+    """Convert MonitorResult objects to JSON-serialisable dicts."""
+    return [
+        {
+            "ticker":       r.ticker,
+            "proposed_qty": r.proposed_qty,
+            "signal": {
+                "score":     r.signal.score,
+                "direction": r.signal.direction,
+                "summary":   r.signal.summary,
+                "price":     r.signal.price,
+                "rsi":       r.signal.rsi,
+                "fired":     r.signal.fired,
+            },
+            "risk": {
+                "verdict":      r.risk.verdict.value,
+                "adjusted_qty": r.risk.adjusted_qty,
+                "reason":       r.risk.reason,
+                "narrative":    r.risk.narrative,
+            },
+        }
+        for r in results
+    ]
+
+
+@app.post("/monitor/watchlist/scan")
+def watchlist_scan(req: WatchlistScanRequest):
+    """
+    On-demand scan for one user's watchlist — bypasses market-hours check.
+
+    Useful for:
+      - Testing outside market hours (e.g. evenings, weekends)
+      - Debugging signal scoring for a specific ticker list
+      - CI/CD smoke tests against the live API
+
+    Calls scan_user_watchlist() directly; alerts are NOT queued (use
+    POST /monitor/scan/run for a full scan with queuing).
+    """
+    try:
+        from orchestrator.watchlist_monitor import scan_user_watchlist
+        alerts = scan_user_watchlist(req.user_id, req.tickers, req.equity)
+        return {
+            "user_id":      req.user_id,
+            "alerts_count": len(alerts),
+            "alerts":       _serialise_monitor_results(alerts),
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/monitor/scan/run")
+def scan_run_now():
+    """
+    Trigger a full watchlist scan across all users immediately.
+
+    Bypasses the market-hours check so engineers can force a scan at any time.
+    Alerts ARE queued to alert_queue (Teams bot will push them on next poll).
+
+    Returns a summary: how many alerts were queued per user.
+    """
+    try:
+        results  = _scheduler.run_now()
+        summary  = {uid: len(alerts) for uid, alerts in results.items()}
+        total    = sum(summary.values())
+        return {
+            "status":        "ok",
+            "users_with_alerts": len(summary),
+            "total_alerts":  total,
+            "per_user":      summary,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/monitor/scan/status")
+def scan_status():
+    """
+    Return scheduler state and next scheduled run time.
+    Useful for confirming the cron is alive after a deployment.
+    """
+    from orchestrator.scheduler import _SCHEDULER, is_market_hours, SCAN_INTERVAL_MINUTES
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    running   = _SCHEDULER is not None and _SCHEDULER.running
+    next_run  = None
+    if running:
+        job = _SCHEDULER.get_job("watchlist_scan")
+        if job and job.next_run_time:
+            next_run = job.next_run_time.isoformat()
+
+    return {
+        "scheduler_running":    running,
+        "market_hours_now":     is_market_hours(),
+        "scan_interval_minutes": SCAN_INTERVAL_MINUTES,
+        "next_run_time":        next_run,
+        "current_time_et":      datetime.now(ZoneInfo("America/New_York")).isoformat(),
+    }
 
 
 # ── Alert endpoints (Phase 5.4 — proactive Teams push) ───────────────────────
