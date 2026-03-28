@@ -579,6 +579,94 @@ def queue_alert_endpoint(req: QueueAlertRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ── Earnings endpoints (Phase 6) ──────────────────────────────────────────────
+
+class EarningsScanRequest(BaseModel):
+    user_id:    str
+    tickers:    list[str]
+    days_ahead: int = 7
+
+
+def _serialise_earnings_alerts(alerts) -> list[dict]:
+    """Convert EarningsAlert objects to JSON-serialisable dicts."""
+    return [
+        {
+            "ticker":           a.ticker,
+            "earnings_date":    a.earnings_date,
+            "days_until":       a.days_until,
+            "eps_estimate":     a.eps_estimate,
+            "eps_low":          a.eps_low,
+            "eps_high":         a.eps_high,
+            "revenue_estimate": a.revenue_estimate,
+            "analyst_rating":   a.analyst_rating,
+            "analyst_target":   a.analyst_target,
+            "thesis":           a.thesis,
+            "summary":          a.summary,
+            "sentiment":        a.sentiment,
+        }
+        for a in alerts
+    ]
+
+
+@app.get("/earnings/upcoming")
+def earnings_upcoming(user_id: str, days_ahead: int = 7):
+    """
+    Return upcoming earnings events for a user's active watchlist tickers.
+
+    Useful for a dashboard view — doesn't queue alerts, just returns data.
+    """
+    try:
+        from stock_agent.watchlist import get_watchlist
+        from orchestrator.earnings_agent import scan_user_earnings
+        tickers = get_watchlist(user_id)
+        if not tickers:
+            return {"user_id": user_id, "alerts": []}
+        alerts = scan_user_earnings(user_id, tickers, days_ahead)
+        return {"user_id": user_id, "alerts_count": len(alerts), "alerts": _serialise_earnings_alerts(alerts)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/earnings/scan")
+def earnings_scan(req: EarningsScanRequest):
+    """
+    On-demand earnings scan for a specific user + ticker list.
+
+    Does NOT queue alerts — returns results directly.
+    Use POST /earnings/scan/run for a full queued scan.
+    """
+    try:
+        from orchestrator.earnings_agent import scan_user_earnings
+        alerts = scan_user_earnings(req.user_id, req.tickers, req.days_ahead)
+        return {
+            "user_id":      req.user_id,
+            "alerts_count": len(alerts),
+            "alerts":       _serialise_earnings_alerts(alerts),
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/earnings/scan/run")
+def earnings_scan_run_now():
+    """
+    Trigger a full earnings scan across all watchlist users immediately.
+    Alerts ARE queued to alert_queue (Teams bot pushes on next poll cycle).
+    """
+    try:
+        from orchestrator.earnings_agent import run_full_earnings_scan
+        results = run_full_earnings_scan(queue_alerts=True)
+        summary = {uid: len(alerts) for uid, alerts in results.items()}
+        return {
+            "status":              "ok",
+            "users_with_alerts":   len(summary),
+            "total_alerts":        sum(summary.values()),
+            "per_user":            summary,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # ── Local dev entry point ─────────────────────────────────────────────────────
 
 if __name__ == "__main__":

@@ -44,7 +44,7 @@ def _conn() -> sqlite3.Connection:
 # ── Schema ─────────────────────────────────────────────────────────────────────
 
 def initialize_db() -> None:
-    """Create both tables if they don't exist."""
+    """Create both tables if they don't exist, and migrate existing schemas."""
     with _conn() as c:
         c.execute("""
             CREATE TABLE IF NOT EXISTS conversation_refs (
@@ -62,9 +62,17 @@ def initialize_db() -> None:
                 risk_json    TEXT    NOT NULL,
                 proposed_qty INTEGER NOT NULL,
                 created_at   TEXT    NOT NULL,
-                delivered_at TEXT
+                delivered_at TEXT,
+                alert_type   TEXT    NOT NULL DEFAULT 'signal'
             )
         """)
+        # Migration: add alert_type to existing tables that predate Phase 6
+        try:
+            c.execute(
+                "ALTER TABLE alert_queue ADD COLUMN alert_type TEXT NOT NULL DEFAULT 'signal'"
+            )
+        except Exception:
+            pass  # column already exists — safe to ignore
 
 
 # ── Conversation references ────────────────────────────────────────────────────
@@ -151,6 +159,46 @@ def queue_alert(user_id: str, monitor_result) -> int:
         return cursor.lastrowid
 
 
+def queue_earnings_alert(user_id: str, earnings_alert) -> int:
+    """
+    Persist one EarningsAlert to the alert_queue with alert_type='earnings'.
+
+    The full earnings payload is stored in signal_json so the Teams bot can
+    build the card without importing EarningsAlert. risk_json is unused for
+    earnings alerts (set to '{}').
+
+    Returns the new alert_id.
+    """
+    initialize_db()
+    now = datetime.now(timezone.utc).isoformat()
+
+    payload_json = json.dumps({
+        "ticker":           earnings_alert.ticker,
+        "earnings_date":    earnings_alert.earnings_date,
+        "days_until":       earnings_alert.days_until,
+        "eps_estimate":     earnings_alert.eps_estimate,
+        "eps_low":          earnings_alert.eps_low,
+        "eps_high":         earnings_alert.eps_high,
+        "revenue_estimate": earnings_alert.revenue_estimate,
+        "analyst_rating":   earnings_alert.analyst_rating,
+        "analyst_target":   earnings_alert.analyst_target,
+        "thesis":           earnings_alert.thesis,
+        "summary":          earnings_alert.summary,
+        "sentiment":        earnings_alert.sentiment,
+    })
+
+    with _conn() as c:
+        cursor = c.execute(
+            """
+            INSERT INTO alert_queue
+              (user_id, ticker, signal_json, risk_json, proposed_qty, created_at, alert_type)
+            VALUES (?, ?, ?, ?, ?, ?, 'earnings')
+            """,
+            (user_id, earnings_alert.ticker, payload_json, "{}", 0, now),
+        )
+        return cursor.lastrowid
+
+
 def get_pending_alerts(user_id: str | None = None) -> list[dict]:
     """
     Return all undelivered alerts, each enriched with the user's
@@ -191,6 +239,7 @@ def get_pending_alerts(user_id: str | None = None) -> list[dict]:
             "id":               row["id"],
             "user_id":          row["user_id"],
             "ticker":           row["ticker"],
+            "alert_type":       row["alert_type"] if "alert_type" in row.keys() else "signal",
             "signal":           json.loads(row["signal_json"]),
             "risk":             json.loads(row["risk_json"]),
             "proposed_qty":     row["proposed_qty"],

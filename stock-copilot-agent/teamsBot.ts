@@ -61,11 +61,27 @@ interface RiskPayload {
   narrative:    string;
 }
 
+interface EarningsPayload {
+  ticker:           string;
+  earnings_date:    string;
+  days_until:       number;
+  eps_estimate:     number | null;
+  eps_low:          number | null;
+  eps_high:         number | null;
+  revenue_estimate: number | null;
+  analyst_rating:   string | null;
+  analyst_target:   number | null;
+  thesis:           string;
+  summary:          string;
+  sentiment:        string;
+}
+
 interface PendingAlert {
   id:               number;
   user_id:          string;
   ticker:           string;
-  signal:           SignalPayload;
+  alert_type:       string;          // "signal" | "earnings"
+  signal:           SignalPayload | EarningsPayload;
   risk:             RiskPayload;
   proposed_qty:     number;
   created_at:       string;
@@ -258,6 +274,83 @@ function buildSignalCard(alert: PendingAlert) {
   });
 }
 
+function buildEarningsCard(alert: PendingAlert) {
+  const e       = alert.signal as EarningsPayload;
+  const { id }  = alert;
+
+  const sentColor: Record<string, string> = {
+    bullish: "Good", bearish: "Attention", neutral: "Default",
+  };
+  const sentEmoji: Record<string, string> = {
+    bullish: "🟢", bearish: "🔴", neutral: "🟡",
+  };
+  const color = sentColor[e.sentiment] ?? "Default";
+  const emoji = sentEmoji[e.sentiment] ?? "🟡";
+
+  const epsStr = e.eps_estimate != null ? `$${e.eps_estimate.toFixed(2)}` : "N/A";
+  const epsRange = (e.eps_low != null && e.eps_high != null)
+    ? ` (${e.eps_low.toFixed(2)} – ${e.eps_high.toFixed(2)})`
+    : "";
+  const revStr = e.revenue_estimate != null
+    ? `$${(e.revenue_estimate / 1e9).toFixed(1)}B`
+    : "N/A";
+  const targetStr = e.analyst_target != null
+    ? `$${e.analyst_target.toFixed(2)}`
+    : "N/A";
+
+  return CardFactory.adaptiveCard({
+    type:    "AdaptiveCard",
+    version: "1.4",
+    body: [
+      {
+        type:   "TextBlock",
+        text:   `📅 ${alert.ticker} — Earnings in ${e.days_until} day(s)`,
+        weight: "Bolder",
+        size:   "Large",
+        color,
+      },
+      {
+        type:  "FactSet",
+        facts: [
+          { title: "Date",           value: e.earnings_date },
+          { title: "EPS Estimate",   value: `${epsStr}${epsRange}` },
+          { title: "Revenue Est",    value: revStr },
+          { title: "Analyst Target", value: targetStr },
+          { title: "Rating",         value: e.analyst_rating ?? "N/A" },
+          { title: "Sentiment",      value: `${emoji} ${(e.sentiment ?? "neutral").toUpperCase()}` },
+        ],
+      },
+      {
+        type:     "TextBlock",
+        text:     e.summary,
+        wrap:     true,
+        spacing:  "Medium",
+        weight:   "Bolder",
+      },
+      {
+        type:     "TextBlock",
+        text:     e.thesis,
+        wrap:     true,
+        spacing:  "Small",
+        isSubtle: true,
+      },
+    ],
+    actions: [
+      {
+        type:  "Action.Submit",
+        title: `🔍 Research ${alert.ticker}`,
+        style: "positive",
+        data:  { action: "analyze_earnings", ticker: alert.ticker, alert_id: id },
+      },
+      {
+        type: "Action.Submit",
+        title: "✖ Dismiss",
+        data: { action: "dismiss_alert", alert_id: id },
+      },
+    ],
+  });
+}
+
 // ── Main bot handler ──────────────────────────────────────────────────────────
 
 export class TeamsBot extends TeamsActivityHandler {
@@ -299,6 +392,28 @@ export class TeamsBot extends TeamsActivityHandler {
             const message = err instanceof Error ? err.message : String(err);
             console.error(`Approve error for [teams:${userId}]:`, message);
             await context.sendActivity(`❌ Error: ${message}`);
+          }
+          await next();
+          return;
+        }
+
+        // Earnings card: Research Now
+        if (action === "analyze_earnings" && cardValue.ticker) {
+          if (cardValue.alert_id) await markAlertDelivered(cardValue.alert_id).catch(() => {});
+          console.log(`[teams:${userId}] earnings research: ${cardValue.ticker}`);
+          try {
+            const msg: AgentMessage = {
+              user_id:   teamsBotId,
+              platform:  "teams",
+              text:      `research ${cardValue.ticker}`,
+              thread_id: threadId,
+              timestamp: String(timestamp),
+            };
+            const response = await callAgent(msg);
+            await context.sendActivity(response.text);
+          } catch (err: unknown) {
+            const message = err instanceof Error ? err.message : String(err);
+            await context.sendActivity(`❌ Research error: ${message}`);
           }
           await next();
           return;
@@ -433,7 +548,9 @@ export class TeamsBot extends TeamsActivityHandler {
         await this.adapter.continueConversation(
           alert.conversation_ref as ConversationReference,
           async (proactiveCtx: TurnContext) => {
-            const card = buildSignalCard(alert);
+            const card = alert.alert_type === "earnings"
+              ? buildEarningsCard(alert)
+              : buildSignalCard(alert);
             await proactiveCtx.sendActivity(MessageFactory.attachment(card));
           },
         );

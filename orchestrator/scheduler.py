@@ -25,6 +25,7 @@ from zoneinfo import ZoneInfo
 from pathlib import Path
 
 from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
 _AGENTS_ROOT = Path(__file__).resolve().parent.parent
@@ -95,6 +96,33 @@ def _scan_job() -> None:
         print(f"[scheduler] scan error: {exc}", file=sys.stderr, flush=True)
 
 
+# ── Earnings job ──────────────────────────────────────────────────────────────
+
+def _earnings_job() -> None:
+    """
+    Daily earnings intelligence scan — runs at 08:00 ET Mon–Fri.
+
+    Fires before market open so users have thesis cards waiting in Teams
+    before trading begins. No market-hours guard needed — it's a cron, not
+    an interval.
+    """
+    now_str = datetime.now(_ET).strftime("%Y-%m-%d %H:%M ET")
+    print(f"[scheduler] earnings scan started at {now_str}", flush=True)
+
+    try:
+        from orchestrator.earnings_agent import run_full_earnings_scan
+        results    = run_full_earnings_scan(queue_alerts=True)
+        total      = sum(len(v) for v in results.values())
+        user_count = len(results)
+        print(
+            f"[scheduler] earnings scan complete — "
+            f"{total} alert(s) queued across {user_count} user(s)",
+            flush=True,
+        )
+    except Exception as exc:
+        print(f"[scheduler] earnings scan error: {exc}", file=sys.stderr, flush=True)
+
+
 # ── Lifecycle ─────────────────────────────────────────────────────────────────
 
 def start() -> None:
@@ -115,6 +143,14 @@ def start() -> None:
         name="Watchlist Monitor Scan",
         replace_existing=True,
         max_instances=1,        # never overlap — long scans on big watchlists
+    )
+    _SCHEDULER.add_job(
+        _earnings_job,
+        trigger=CronTrigger(day_of_week="mon-fri", hour=8, minute=0, timezone=_ET),
+        id="earnings_scan",
+        name="Earnings Intelligence Scan",
+        replace_existing=True,
+        max_instances=1,
     )
     _SCHEDULER.start()
     print(

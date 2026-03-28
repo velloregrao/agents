@@ -61,7 +61,7 @@ _client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 _VALID_INTENTS = frozenset({
     "analyze", "research", "trade", "portfolio",
     "reflect", "monitor", "help", "unknown",
-    "watch", "unwatch", "watchlist",
+    "watch", "unwatch", "watchlist", "earnings",
 })
 
 _CLASSIFIER_SYSTEM = """You are an intent classifier for a stock trading assistant.
@@ -78,6 +78,7 @@ Intents:
   watch     → user wants to add one or more tickers to their watchlist
   unwatch   → user wants to remove one or more tickers from their watchlist
   watchlist → user wants to see their current watchlist
+  earnings  → user wants upcoming earnings dates, estimates, or pre-earnings thesis for a stock
   help      → greeting, or asking what the bot can do
   unknown   → message does not match any category
 
@@ -141,7 +142,8 @@ _SKIP_WORDS = frozenset({
     "BUY", "SELL", "PORTFOLIO", "PERFORMANCE", "REFLECT", "REFLECTION",
     "MONITOR", "POSITIONS", "HELP", "HI", "HELLO", "AND", "ON", "A",
     "RUN", "CHECK", "MY", "WATCH", "UNWATCH", "TRACK", "FOLLOW",
-    "WATCHLIST", "REMOVE", "ADD", "STOP",
+    "WATCHLIST", "REMOVE", "ADD", "STOP", "EARNINGS", "WHEN", "REPORT",
+    "UPCOMING", "REPORTS", "DOES",
 })
 
 
@@ -161,6 +163,8 @@ def _parse_intent_fallback(text: str) -> tuple[str, list[str]]:
         return "portfolio", tickers
     if re.search(r"reflect|reflection|lessons|learn", text, re.IGNORECASE):
         return "reflect", []
+    if re.search(r"earnings|when.*report|upcoming.*earn|earn.*date|report.*date", text, re.IGNORECASE):
+        return "earnings", tickers
     if re.search(r"unwatch|stop\s+watch|stop\s+track|remove.*watch", text, re.IGNORECASE) and tickers:
         return "unwatch", tickers
     if re.search(r"watchlist|what.*watch|show.*watch|my.*watch", text, re.IGNORECASE):
@@ -258,7 +262,9 @@ def _dispatch_full(
             "- **Trade AAPL MSFT TSLA** — Run trading agent on watchlist\n"
             "- **Portfolio** — Show positions and balance\n"
             "- **Reflect** — Extract lessons from trade history\n"
-            "- **Monitor** — Review open positions for exits\n\n"
+            "- **Monitor** — Review open positions for exits\n"
+            "- **Watch AAPL NVDA** — Add tickers to proactive watchlist\n"
+            "- **Earnings AAPL** — Pre-earnings thesis and estimates\n\n"
             "*Powered by Claude + Alpaca paper trading*"
         ), False, None
 
@@ -311,6 +317,36 @@ def _dispatch_full(
             "\n*Scanned every 15 min during market hours (9:30–16:00 ET). "
             "You'll be alerted when a signal fires and clears the risk gate.*"
         )
+        return "\n".join(lines), False, None
+
+    if intent == "earnings":
+        from orchestrator.earnings_agent import scan_user_earnings
+        scan_tickers = tickers if tickers else get_watchlist(user_id)
+        if not scan_tickers:
+            return (
+                "📋 No tickers specified and your watchlist is empty.\n\n"
+                "Try: **Earnings AAPL** or add tickers with **Watch AAPL NVDA**"
+            ), False, None
+        alerts = scan_user_earnings(user_id, scan_tickers)
+        if not alerts:
+            ticker_str = ", ".join(scan_tickers)
+            return (
+                f"📅 No earnings events in the next 7 days for: **{ticker_str}**\n\n"
+                f"*Check back closer to the next reporting season.*"
+            ), False, None
+        lines = [f"## 📅 Upcoming Earnings ({len(alerts)} event(s))\n"]
+        for a in alerts:
+            eps_str = f"${a.eps_estimate:.2f}" if a.eps_estimate is not None else "N/A"
+            rev_str = f"${a.revenue_estimate / 1e9:.1f}B" if a.revenue_estimate else "N/A"
+            emoji   = "🟢" if a.sentiment == "bullish" else "🔴" if a.sentiment == "bearish" else "🟡"
+            lines += [
+                f"### {a.ticker} — {a.earnings_date} ({a.days_until}d away)",
+                f"{emoji} **{a.sentiment.upper()}**  |  EPS Est: {eps_str}  |  Rev Est: {rev_str}",
+                f"> {a.summary}",
+                "",
+                a.thesis,
+                "",
+            ]
         return "\n".join(lines), False, None
 
     if intent == "analyze" and tickers:
