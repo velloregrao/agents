@@ -10,10 +10,12 @@ Coverage:
   - fetch_earnings_calendar() returns None when event is too far out
   - fetch_earnings_calendar() returns None when no calendar data available
   - fetch_earnings_calendar() handles DataFrame and dict yfinance returns
+  - fetch_earnings_calendar() handles plain datetime.date (yfinance ≥ 0.2.x)
   - scan_user_earnings() returns EarningsAlert for upcoming events
   - scan_user_earnings() skips tickers with no upcoming event
   - scan_user_earnings() returns [] for empty ticker list
   - scan_user_earnings() skips ticker when yfinance raises an exception
+  - scan_user_earnings() processes N tickers concurrently (timing proof)
   - EarningsAlert has correct fields from mocked data
   - run_full_earnings_scan() deduplicates tickers across users
   - run_full_earnings_scan() returns empty dict when no watchlists
@@ -21,6 +23,7 @@ Coverage:
 """
 
 import sys
+import time
 from datetime import date, timedelta
 from pathlib import Path
 from unittest.mock import patch, MagicMock
@@ -310,3 +313,67 @@ class TestRunFullEarningsScan:
 
         results = run_full_earnings_scan(queue_alerts=False)
         assert results["user:1"][0].user_id == "user:1"
+
+
+# ── Concurrency proof ─────────────────────────────────────────────────────────
+
+class TestConcurrency:
+    """
+    Verify that scan_user_earnings() runs tickers in parallel, not sequentially.
+
+    Each mocked I/O step sleeps for a fixed duration.  If execution were
+    sequential the total time would be N × per_ticker_latency.  With
+    asyncio.gather() + ThreadPoolExecutor the wall time should be close to
+    one per_ticker_latency regardless of N.
+
+    Threshold: total elapsed < 2 × per_ticker_latency  (generous, CI-safe).
+    """
+
+    _SLEEP   = 0.25   # seconds per simulated I/O call
+    _TICKERS = ["AAPL", "MSFT", "NVDA", "GOOGL", "AMZN"]  # 5 tickers
+
+    def _slow_ticker(self, sym):
+        time.sleep(self._SLEEP)       # simulate yfinance network call
+        t = MagicMock()
+        t.calendar = _cal_dict(days_from_now=3)
+        t.info = {}
+        return t
+
+    def _slow_brave(self, query, count=5):
+        time.sleep(self._SLEEP)       # simulate Brave HTTP call
+        return []
+
+    def _slow_thesis(self, ticker, cal, brave, analyst):
+        time.sleep(self._SLEEP)       # simulate Sonnet API call
+        return ("thesis", "summary", "bullish")
+
+    def test_parallel_faster_than_sequential(self):
+        """
+        Wall time with 5 tickers must be well under 5× per-ticker latency.
+        Each ticker has 3 sleeps of _SLEEP seconds (calendar, brave, thesis).
+        Sequential would take 5 × 3 × 0.25 = 3.75 s.
+        Parallel should finish in ~0.75 s (one ticker worth of latency).
+        Threshold: < 2 × 0.75 = 1.5 s to stay CI-safe.
+        """
+        per_ticker   = 3 * self._SLEEP       # calendar + brave + thesis
+        sequential_t = len(self._TICKERS) * per_ticker
+        threshold    = 2 * per_ticker        # generous upper bound for CI
+
+        with patch("orchestrator.earnings_agent.yf") as mock_yf, \
+             patch("orchestrator.earnings_agent._brave_search",
+                   side_effect=self._slow_brave), \
+             patch("orchestrator.earnings_agent._generate_thesis",
+                   side_effect=self._slow_thesis), \
+             patch("orchestrator.earnings_agent._get_analyst_data",
+                   return_value={}):
+            mock_yf.Ticker.side_effect = self._slow_ticker
+
+            t0      = time.perf_counter()
+            alerts  = scan_user_earnings("user:1", self._TICKERS)
+            elapsed = time.perf_counter() - t0
+
+        assert len(alerts) == len(self._TICKERS), "all tickers should produce an alert"
+        assert elapsed < threshold, (
+            f"parallel scan took {elapsed:.2f}s — expected < {threshold:.2f}s "
+            f"(sequential would be ~{sequential_t:.2f}s)"
+        )
