@@ -43,6 +43,8 @@ from stock_agent.memory import (
 )
 from stock_agent.watchlist import initialize_db as initialize_watchlist_db
 from stock_agent.agent import run_analysis
+
+# Alert manager lives in the orchestrator package (imported after sys.path is set below)
 from stock_agent.trading_agent import run_trading_agent, monitor_positions
 from stock_agent.reflection import reflect
 from stock_agent.research import run_research_orchestrator
@@ -55,6 +57,13 @@ sys.path.insert(0, str(_AGENTS_ROOT))
 from orchestrator.router import route as _route
 from orchestrator.contracts import AgentMessage
 from orchestrator.approval_manager import get_pending, resolve as resolve_approval
+from orchestrator.alert_manager import (
+    initialize_db as initialize_alert_db,
+    store_conversation_ref,
+    get_pending_alerts,
+    mark_alert_delivered,
+    queue_alert as _queue_alert,
+)
 
 app = FastAPI(title="Stock Trading Agent API", version="1.0.0")
 
@@ -72,6 +81,7 @@ _client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 def startup():
     initialize_db()
     initialize_watchlist_db()
+    initialize_alert_db()
 
 
 # ── Request models ────────────────────────────────────────────────────────────
@@ -340,6 +350,116 @@ def agent_endpoint(req: AgentRequest):
             requires_approval=resp.requires_approval,
             approval_context=resp.approval_context,
         )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Alert endpoints (Phase 5.4 — proactive Teams push) ───────────────────────
+
+class ConversationRefRequest(BaseModel):
+    user_id:          str
+    conversation_ref: dict   # full Teams ConversationReference JSON
+
+
+class AlertDeliveredRequest(BaseModel):
+    pass  # body unused — alert_id comes from the path
+
+
+class QueueAlertRequest(BaseModel):
+    """Internal endpoint for manual alert injection during testing."""
+    user_id:      str
+    ticker:       str
+    score:        float
+    direction:    str
+    summary:      str
+    price:        float
+    rsi:          float
+    verdict:      str
+    adjusted_qty: int
+    reason:       str
+    narrative:    str
+    proposed_qty: int
+
+
+@app.post("/alerts/store-ref", status_code=204)
+def store_ref(req: ConversationRefRequest):
+    """
+    Upsert a Teams ConversationReference for a user.
+
+    Called by the bot on every incoming activity so we always have a fresh
+    reference needed for proactive push via CloudAdapter.continueConversation().
+    """
+    try:
+        store_conversation_ref(req.user_id, req.conversation_ref)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/alerts/pending")
+def pending_alerts(user_id: str | None = None):
+    """
+    Return all undelivered alerts, optionally filtered to one user.
+
+    Each alert includes the user's stored ConversationReference
+    (null if the user has never messaged the bot — bot skips delivery).
+
+    Polled by the Teams bot on a 30-second interval.
+    """
+    try:
+        return {"alerts": get_pending_alerts(user_id)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/alerts/delivered/{alert_id}", status_code=204)
+def alert_delivered(alert_id: int):
+    """
+    Mark an alert as delivered after the bot successfully pushes it to Teams.
+    Prevents duplicate delivery on the next poll cycle.
+    """
+    try:
+        mark_alert_delivered(alert_id)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/alerts/queue")
+def queue_alert_endpoint(req: QueueAlertRequest):
+    """
+    Manually inject an alert into the queue.
+
+    Used for testing proactive push without running the full watchlist scanner.
+    In production, alerts are queued automatically by the cron job.
+    """
+    try:
+        # Build lightweight stand-in objects that match MonitorResult field access
+        class _Signal:
+            ticker    = req.ticker
+            score     = req.score
+            direction = req.direction
+            summary   = req.summary
+            price     = req.price
+            rsi       = req.rsi
+            fired     = True
+
+        class _Verdict:
+            value = req.verdict
+
+        class _Risk:
+            verdict      = _Verdict()
+            adjusted_qty = req.adjusted_qty
+            reason       = req.reason
+            narrative    = req.narrative
+
+        class _Result:
+            ticker       = req.ticker
+            user_id      = req.user_id
+            signal       = _Signal()
+            risk         = _Risk()
+            proposed_qty = req.proposed_qty
+
+        alert_id = _queue_alert(req.user_id, _Result())
+        return {"alert_id": alert_id}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

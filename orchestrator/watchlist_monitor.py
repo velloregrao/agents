@@ -40,6 +40,7 @@ sys.path.insert(0, str(_AGENTS_ROOT / "stock-analysis-agent" / "src"))
 
 from orchestrator.signal_scorer import score_ticker, SignalScore
 from orchestrator.risk_agent import evaluate_proposal, RiskResult, Verdict
+from orchestrator.alert_manager import queue_alert
 from stock_agent.watchlist import get_all_active_watchlists
 from stock_agent.alpaca_tools import get_account_balance
 
@@ -202,12 +203,15 @@ async def run_scan_async(
 
 # ── Public sync entry points ──────────────────────────────────────────────────
 
-def run_full_scan() -> dict[str, list[MonitorResult]]:
+def run_full_scan(queue_alerts: bool = True) -> dict[str, list[MonitorResult]]:
     """
     Full watchlist scan — called by the APScheduler cron job (Step 5.5).
 
     Fetches all active watchlists and account equity, then delegates to
     run_scan_async() via asyncio.run().
+
+    When queue_alerts=True (default), every MonitorResult is persisted to
+    the alert_queue table so the Teams bot can poll and push proactively.
 
     Safe to call from a background thread (APScheduler's default executor).
     Do NOT call from within an already-running event loop — use
@@ -222,7 +226,21 @@ def run_full_scan() -> dict[str, list[MonitorResult]]:
     account = get_account_balance()
     equity  = float(account.get("equity", 0)) if not account.get("error") else 0.0
 
-    return asyncio.run(run_scan_async(watchlists, equity))
+    results = asyncio.run(run_scan_async(watchlists, equity))
+
+    if queue_alerts:
+        for user_id, alerts in results.items():
+            for alert in alerts:
+                try:
+                    queue_alert(user_id, alert)
+                except Exception as exc:
+                    print(
+                        f"[monitor] failed to queue alert {alert.ticker} "
+                        f"for {user_id}: {exc}",
+                        file=sys.stderr,
+                    )
+
+    return results
 
 
 def scan_user_watchlist(

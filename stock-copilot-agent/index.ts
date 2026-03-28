@@ -58,7 +58,8 @@ const onTurnErrorHandler = async (context: TurnContext, error: Error) => {
 adapter.onTurnError = onTurnErrorHandler;
 
 // Create the bot that will handle incoming messages.
-const bot = new TeamsBot();
+// Pass the adapter so TeamsBot can use continueConversation() for proactive push.
+const bot = new TeamsBot(adapter);
 
 // Create HTTP server.
 const server = restify.createServer();
