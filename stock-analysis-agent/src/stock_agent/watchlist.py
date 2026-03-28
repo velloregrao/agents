@@ -21,16 +21,18 @@ from pathlib import Path
 
 # ── DB path — same file as trades, lessons, pending_approvals ─────────────────
 
-DB_PATH = os.getenv("DB_PATH", str(
+_DEFAULT_DB = str(
     Path.home() / "Library" / "Mobile Documents" / "com~apple~CloudDocs"
     / "Projects" / "data" / "trading_memory.db"
-))
+)
 
 
 # ── DB helpers ────────────────────────────────────────────────────────────────
 
 def _conn() -> sqlite3.Connection:
-    c = sqlite3.connect(DB_PATH)
+    # Read DB_PATH at call time (not import time) so tests can override via env.
+    db_path = os.getenv("DB_PATH", _DEFAULT_DB)
+    c = sqlite3.connect(db_path)
     c.row_factory = sqlite3.Row
     return c
 
