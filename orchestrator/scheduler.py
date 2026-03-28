@@ -123,6 +123,48 @@ def _earnings_job() -> None:
         print(f"[scheduler] earnings scan error: {exc}", file=sys.stderr, flush=True)
 
 
+# ── Journal sync job (Phase 9) ────────────────────────────────────────────────
+
+def _journal_sync_job() -> None:
+    """
+    Lightweight 15-min cron — sync closed Alpaca positions to the trade journal.
+
+    Runs during market hours only (same guard as _scan_job). Outside market
+    hours there are no new fills to pick up, so the job is a no-op.
+    """
+    if not is_market_hours():
+        return
+
+    try:
+        from orchestrator.journal_agent import run_journal_sync
+        run_journal_sync()
+    except Exception as exc:
+        print(f"[scheduler] journal sync error: {exc}", file=sys.stderr, flush=True)
+
+
+def _weekly_reflection_job() -> None:
+    """
+    Weekly reflection cron — runs every Monday at 08:00 ET.
+
+    Syncs closed trades, runs Sonnet reflection, and queues a digest card
+    to all users with active watchlists.
+    """
+    now_str = datetime.now(_ET).strftime("%Y-%m-%d %H:%M ET")
+    print(f"[scheduler] weekly reflection started at {now_str}", flush=True)
+
+    try:
+        from orchestrator.journal_agent import run_weekly_reflection
+        digest = run_weekly_reflection()
+        status = digest.get("status", "unknown")
+        print(
+            f"[scheduler] weekly reflection complete — "
+            f"status={status}, lessons={len(digest.get('lessons', []))}",
+            flush=True,
+        )
+    except Exception as exc:
+        print(f"[scheduler] weekly reflection error: {exc}", file=sys.stderr, flush=True)
+
+
 # ── Lifecycle ─────────────────────────────────────────────────────────────────
 
 def start() -> None:
@@ -149,6 +191,22 @@ def start() -> None:
         trigger=CronTrigger(day_of_week="mon-fri", hour=8, minute=0, timezone=_ET),
         id="earnings_scan",
         name="Earnings Intelligence Scan",
+        replace_existing=True,
+        max_instances=1,
+    )
+    _SCHEDULER.add_job(
+        _journal_sync_job,
+        trigger=IntervalTrigger(minutes=SCAN_INTERVAL_MINUTES, timezone=_ET),
+        id="journal_sync",
+        name="Trade Journal Sync",
+        replace_existing=True,
+        max_instances=1,
+    )
+    _SCHEDULER.add_job(
+        _weekly_reflection_job,
+        trigger=CronTrigger(day_of_week="mon", hour=8, minute=0, timezone=_ET),
+        id="weekly_reflection",
+        name="Weekly Trade Reflection",
         replace_existing=True,
         max_instances=1,
     )

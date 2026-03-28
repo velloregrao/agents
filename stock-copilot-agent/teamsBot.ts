@@ -76,6 +76,27 @@ interface EarningsPayload {
   sentiment:        string;
 }
 
+interface JournalPerformance {
+  total_trades:    number;
+  winning_trades:  number;
+  losing_trades:   number;
+  win_rate:        number;
+  total_pnl:       number;
+  avg_return_pct:  number;
+  avg_hold_days:   number;
+  best_trade_pct:  number;
+  worst_trade_pct: number;
+}
+
+interface JournalPayload {
+  status:          string;   // "completed" | "skipped"
+  week_of:         string;
+  trades_analyzed: number;
+  lessons:         string[];
+  summary:         string;
+  performance:     Partial<JournalPerformance>;
+}
+
 interface RebalanceTrade {
   ticker:       string;
   side:         string;
@@ -109,8 +130,8 @@ interface PendingAlert {
   id:               number;
   user_id:          string;
   ticker:           string;
-  alert_type:       string;          // "signal" | "earnings" | "rebalance"
-  signal:           SignalPayload | EarningsPayload | RebalancePayload;
+  alert_type:       string;          // "signal" | "earnings" | "rebalance" | "journal"
+  signal:           SignalPayload | EarningsPayload | RebalancePayload | JournalPayload;
   risk:             RiskPayload;
   proposed_qty:     number;
   created_at:       string;
@@ -401,6 +422,90 @@ function buildEarningsCard(alert: PendingAlert) {
   });
 }
 
+function buildJournalCard(alert: PendingAlert) {
+  const j      = alert.signal as JournalPayload;
+  const { id } = alert;
+  const perf   = j.performance ?? {};
+
+  const winRate  = perf.win_rate  != null ? `${perf.win_rate.toFixed(1)}%`  : "N/A";
+  const totalPnl = perf.total_pnl != null
+    ? `${perf.total_pnl >= 0 ? "+" : ""}$${perf.total_pnl.toFixed(2)}`
+    : "N/A";
+  const avgRet   = perf.avg_return_pct != null
+    ? `${perf.avg_return_pct >= 0 ? "+" : ""}${perf.avg_return_pct.toFixed(1)}%`
+    : "N/A";
+  const bestTrade  = perf.best_trade_pct  != null ? `+${perf.best_trade_pct.toFixed(1)}%`  : "N/A";
+  const worstTrade = perf.worst_trade_pct != null ? `${perf.worst_trade_pct.toFixed(1)}%` : "N/A";
+
+  // Lessons as a numbered list (max 5)
+  const lessonBlocks = j.lessons.slice(0, 5).map((lesson, i) => ({
+    type:     "TextBlock",
+    text:     `${i + 1}. ${lesson}`,
+    wrap:     true,
+    spacing:  i === 0 ? "Small" : "None",
+    isSubtle: false,
+  }));
+
+  return CardFactory.adaptiveCard({
+    type:    "AdaptiveCard",
+    version: "1.4",
+    body: [
+      {
+        type:   "TextBlock",
+        text:   `📖 Weekly Trading Digest — Week of ${j.week_of}`,
+        weight: "Bolder",
+        size:   "Large",
+        color:  "Accent",
+      },
+      {
+        type:  "FactSet",
+        facts: [
+          { title: "Trades Closed",  value: String(j.trades_analyzed) },
+          { title: "Win Rate",       value: winRate   },
+          { title: "Total P&L",      value: totalPnl  },
+          { title: "Avg Return",     value: avgRet    },
+          { title: "Best Trade",     value: bestTrade  },
+          { title: "Worst Trade",    value: worstTrade },
+        ],
+      },
+      ...(j.lessons.length > 0 ? [
+        {
+          type:    "TextBlock",
+          text:    `🧠 New Lessons Extracted (${j.lessons.length})`,
+          weight:  "Bolder",
+          spacing: "Medium",
+        },
+        ...lessonBlocks,
+      ] : [{
+        type:    "TextBlock",
+        text:    "No new lessons this week.",
+        spacing: "Medium",
+        isSubtle: true,
+      }]),
+      ...(j.summary ? [{
+        type:     "TextBlock",
+        text:     j.summary,
+        wrap:     true,
+        spacing:  "Medium",
+        isSubtle: true,
+      }] : []),
+    ],
+    actions: [
+      {
+        type:  "Action.Submit",
+        title: "🔍 Full Reflection",
+        style: "positive",
+        data:  { action: "run_reflect", alert_id: id },
+      },
+      {
+        type: "Action.Submit",
+        title: "✓ Dismiss",
+        data: { action: "dismiss_alert", alert_id: id },
+      },
+    ],
+  });
+}
+
 function buildRebalanceCard(alert: PendingAlert) {
   const p      = alert.signal as RebalancePayload;
   const { id } = alert;
@@ -589,6 +694,28 @@ export class TeamsBot extends TeamsActivityHandler {
           return;
         }
 
+        // Journal card: Full Reflection
+        if (action === "run_reflect") {
+          if (cardValue.alert_id) await markAlertDelivered(cardValue.alert_id).catch(() => {});
+          console.log(`[teams:${userId}] journal reflect triggered`);
+          try {
+            const msg: AgentMessage = {
+              user_id:   teamsBotId,
+              platform:  "teams",
+              text:      "Reflect",
+              thread_id: threadId,
+              timestamp: String(timestamp),
+            };
+            const response = await callAgent(msg);
+            await context.sendActivity(response.text);
+          } catch (err: unknown) {
+            const message = err instanceof Error ? err.message : String(err);
+            await context.sendActivity(`❌ Reflection error: ${message}`);
+          }
+          await next();
+          return;
+        }
+
         // Rebalance card: Approve & Execute
         if (action === "approve_rebalance" && cardValue.plan_id) {
           if (cardValue.alert_id) await markAlertDelivered(cardValue.alert_id).catch(() => {});
@@ -727,6 +854,8 @@ export class TeamsBot extends TeamsActivityHandler {
               ? buildEarningsCard(alert)
               : alert.alert_type === "rebalance"
               ? buildRebalanceCard(alert)
+              : alert.alert_type === "journal"
+              ? buildJournalCard(alert)
               : buildSignalCard(alert);
             await proactiveCtx.sendActivity(MessageFactory.attachment(card));
           },

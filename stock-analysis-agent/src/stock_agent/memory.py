@@ -89,6 +89,17 @@ def initialize_db():
         )
     """)
 
+    # Phase 9 migrations — add signal enrichment columns to existing trades tables
+    for col, col_type in [
+        ("signal_score",   "REAL"),
+        ("momentum_score", "REAL"),
+        ("thesis_text",    "TEXT"),
+    ]:
+        try:
+            cursor.execute(f"ALTER TABLE trades ADD COLUMN {col} {col_type}")
+        except Exception:
+            pass  # column already exists — safe to ignore
+
     conn.commit()
     conn.close()
     print(f"Memory store initialized at {DB_PATH}")
@@ -104,6 +115,9 @@ def store_trade(
     entry_vix: float = None,
     sector: str = None,
     reasoning: str = None,
+    signal_score: float = None,
+    momentum_score: float = None,
+    thesis_text: str = None,
 ) -> dict:
     """
     Store a new trade when it's placed.
@@ -125,12 +139,14 @@ def store_trade(
         cursor.execute("""
             INSERT OR IGNORE INTO trades
             (order_id, ticker, side, quantity, entry_price, entry_date,
-             entry_rsi, entry_vix, sector, reasoning, status)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'OPEN')
+             entry_rsi, entry_vix, sector, reasoning, status,
+             signal_score, momentum_score, thesis_text)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'OPEN', ?, ?, ?)
         """, (
             order_id, ticker.upper(), side.upper(), quantity,
             entry_price, datetime.now().isoformat(),
-            entry_rsi, entry_vix, sector, reasoning
+            entry_rsi, entry_vix, sector, reasoning,
+            signal_score, momentum_score, thesis_text,
         ))
         conn.commit()
         conn.close()

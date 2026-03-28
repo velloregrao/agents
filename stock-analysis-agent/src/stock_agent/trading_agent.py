@@ -155,7 +155,10 @@ TOOLS = [
                 "entry_price": {"type": "number",  "description": "Estimated entry price"},
                 "entry_rsi":   {"type": "number",  "description": "RSI at time of entry"},
                 "sector":      {"type": "string",  "description": "Stock sector"},
-                "reasoning":   {"type": "string",  "description": "Why this trade was placed"}
+                "reasoning":      {"type": "string",  "description": "Why this trade was placed"},
+                "signal_score":   {"type": "number",  "description": "Composite signal score from technical analysis (-10 to +10)"},
+                "momentum_score": {"type": "number",  "description": "Momentum score at entry (-10 to +10)"},
+                "thesis_text":    {"type": "string",  "description": "Full analysis thesis text that led to this trade decision"}
             },
             "required": ["order_id", "ticker", "side", "quantity", "entry_price"]
         }
@@ -254,7 +257,7 @@ def run_trading_agent(watchlist: list[str], user_request: str = None) -> str:
 - This is paper trading — be bold enough to learn but disciplined enough to improve
 
 ## Important
-- After EVERY successful place_order, you MUST immediately call store_trade with the order_id, ticker, side, quantity, entry_price, entry_rsi, sector, and your reasoning
+- After EVERY successful place_order, you MUST immediately call store_trade with the order_id, ticker, side, quantity, entry_price, entry_rsi, sector, reasoning, signal_score (if available from signal scorer), momentum_score (if available), and thesis_text (your full analysis for this trade)
 - After EVERY successful close_position, you MUST immediately call close_trade with the original order_id, exit_price, and outcome_notes
 - Explain every decision clearly so the system can learn from it
 - This is for educational purposes only — not financial advice"""

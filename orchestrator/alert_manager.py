@@ -261,6 +261,42 @@ def mark_alert_delivered(alert_id: int) -> None:
         )
 
 
+# ── Journal alert (Phase 9) ────────────────────────────────────────────────────
+
+def queue_journal_alert(user_id: str, digest: dict) -> int:
+    """
+    Persist a weekly trading digest to the alert_queue with alert_type='journal'.
+
+    The full digest payload (lessons, summary, performance stats) is stored in
+    signal_json so the Teams bot can build the card without importing journal types.
+    risk_json is unused for journal alerts (set to '{}').
+
+    Returns the new alert_id.
+    """
+    initialize_db()
+    now = datetime.now(timezone.utc).isoformat()
+
+    payload_json = json.dumps({
+        "status":          digest.get("status", "completed"),
+        "week_of":         digest.get("week_of", now[:10]),
+        "trades_analyzed": digest.get("trades_analyzed", 0),
+        "lessons":         digest.get("lessons", []),
+        "summary":         digest.get("summary", ""),
+        "performance":     digest.get("performance", {}),
+    })
+
+    with _conn() as c:
+        cursor = c.execute(
+            """
+            INSERT INTO alert_queue
+              (user_id, ticker, signal_json, risk_json, proposed_qty, created_at, alert_type)
+            VALUES (?, ?, ?, ?, ?, ?, 'journal')
+            """,
+            (user_id, "JOURNAL", payload_json, "{}", 0, now),
+        )
+        return cursor.lastrowid
+
+
 # ── Rebalance plan store (Phase 8) ─────────────────────────────────────────────
 
 def _ensure_rebalance_table() -> None:

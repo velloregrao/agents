@@ -791,6 +791,74 @@ def portfolio_allocation():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ── Trade Journal endpoints (Phase 9) ────────────────────────────────────────
+
+@app.post("/journal/sync")
+def journal_sync():
+    """
+    Trigger an immediate sync of closed Alpaca positions to the trade journal.
+
+    Useful for:
+      - Testing outside the cron schedule
+      - Manually closing out stale open trades after paper account resets
+      - CI smoke tests to confirm Alpaca connectivity and DB writes
+
+    Returns a summary of how many trades were closed this run.
+    """
+    try:
+        from orchestrator.journal_agent import run_journal_sync
+        result = run_journal_sync()
+        return {
+            "status":  "ok",
+            "synced":  result["synced"],
+            "skipped": result["skipped"],
+            "errors":  result["errors"],
+            "details": result["details"],
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/journal/digest")
+def journal_digest():
+    """
+    Build and return the weekly reflection digest on demand.
+
+    Does NOT queue a Teams alert — returns the digest directly.
+    Use POST /journal/reflect/run for a full run that also queues the card.
+
+    Useful for dashboards or testing the reflect → digest pipeline.
+    """
+    try:
+        from orchestrator.journal_agent import build_weekly_digest
+        digest = build_weekly_digest()
+        return digest
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/journal/reflect/run")
+def journal_reflect_run():
+    """
+    Trigger a full weekly reflection: sync closed trades + reflect + queue Teams card.
+
+    Mirrors what the Monday 08:00 cron does. Useful for forcing a reflection
+    outside the weekly schedule (e.g. after a batch of test trades).
+    """
+    try:
+        from orchestrator.journal_agent import run_weekly_reflection
+        digest = run_weekly_reflection()
+        return {
+            "status":          digest.get("status"),
+            "week_of":         digest.get("week_of", ""),
+            "trades_analyzed": digest.get("trades_analyzed", 0),
+            "lessons_count":   len(digest.get("lessons", [])),
+            "summary":         digest.get("summary", ""),
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # ── Local dev entry point ─────────────────────────────────────────────────────
 
 if __name__ == "__main__":
