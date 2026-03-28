@@ -196,7 +196,8 @@ function buildApprovalCard(ctx: Record<string, unknown>) {
 }
 
 function buildSignalCard(alert: PendingAlert) {
-  const { ticker, signal, risk, proposed_qty, id } = alert;
+  const { ticker, risk, proposed_qty, id } = alert;
+  const signal = alert.signal as SignalPayload;
 
   // Direction emoji and colour
   const isBullish = signal.direction === "bullish";
