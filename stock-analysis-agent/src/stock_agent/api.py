@@ -53,6 +53,7 @@ sys.path.insert(0, str(_AGENTS_ROOT))
 
 from orchestrator.router import route as _route
 from orchestrator.contracts import AgentMessage
+from orchestrator.approval_manager import get_pending, resolve as resolve_approval
 
 app = FastAPI(title="Stock Trading Agent API", version="1.0.0")
 
@@ -235,8 +236,7 @@ def research(req: ResearchRequest):
 
 
 # ── /agent — single platform-agnostic endpoint ────────────────────────────────
-# All routing and classification now lives in orchestrator/router.py.
-# This endpoint is a thin HTTP adapter: deserialise → AgentMessage → route() → serialise.
+# Model definitions shared by /agent and /agent/approve
 
 class AgentRequest(BaseModel):
     user_id:   str
@@ -250,6 +250,69 @@ class AgentResponseModel(BaseModel):
     text:              str
     requires_approval: bool        = False
     approval_context:  dict | None = None
+
+
+# ── /agent/approve — human decision on an ESCALATED trade proposal ────────────
+
+class ApproveRequest(BaseModel):
+    approval_id: str
+    decision:    str   # "approve" or "reject"
+    user_id:     str
+
+@app.post("/agent/approve", response_model=AgentResponseModel)
+def approve_endpoint(req: ApproveRequest):
+    """
+    Receive a human Approve/Reject decision for an ESCALATED trade proposal.
+
+    Called by channel adapters when the user clicks an approval button
+    (Teams Adaptive Card, Slack Block Kit button, etc.).
+
+    Flow:
+        1. Fetch the pending proposal by approval_id
+        2. If rejected: mark resolved, return confirmation
+        3. If approved: mark resolved, execute trade via run_trading_agent
+    """
+    if req.decision not in ("approve", "reject"):
+        raise HTTPException(status_code=400, detail="decision must be 'approve' or 'reject'")
+
+    try:
+        pending = get_pending(req.approval_id)
+        if not pending:
+            return AgentResponseModel(
+                intent="approve",
+                text="❌ Approval request not found or has expired.",
+            )
+
+        if req.decision == "reject":
+            resolve_approval(req.approval_id, "rejected")
+            return AgentResponseModel(
+                intent="approve",
+                text=(
+                    f"❌ Trade rejected: "
+                    f"{pending['side'].upper()} {pending['qty']} shares of "
+                    f"{pending['ticker']}."
+                ),
+            )
+
+        # Approved — execute the trade
+        resolve_approval(req.approval_id, "approved")
+        trade_request = (
+            f"buy {pending['qty']} shares of {pending['ticker']} — "
+            f"human-approved after risk escalation ({pending['reason']})"
+        )
+        result = run_trading_agent([pending["ticker"]], trade_request)
+        return AgentResponseModel(
+            intent="approve",
+            text=f"✅ Trade approved and executed.\n\n{result}",
+        )
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── /agent — single platform-agnostic endpoint ────────────────────────────────
+# All routing and classification now lives in orchestrator/router.py.
+# This endpoint is a thin HTTP adapter: deserialise → AgentMessage → route() → serialise.
 
 @app.post("/agent", response_model=AgentResponseModel)
 def agent_endpoint(req: AgentRequest):

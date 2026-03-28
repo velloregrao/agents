@@ -11,7 +11,7 @@
  * intents, tickers, or trading logic.
  */
 
-import { TeamsActivityHandler, TurnContext } from "botbuilder";
+import { TeamsActivityHandler, TurnContext, CardFactory, MessageFactory } from "botbuilder";
 import config from "./config";
 
 const API = config.pythonApiUrl;
@@ -33,7 +33,7 @@ interface AgentResponse {
   approval_context?:  Record<string, unknown>;
 }
 
-// ── HTTP helper ───────────────────────────────────────────────────────────────
+// ── HTTP helpers ──────────────────────────────────────────────────────────────
 
 async function callAgent(msg: AgentMessage): Promise<AgentResponse> {
   const res = await fetch(`${API}/agent`, {
@@ -48,6 +48,76 @@ async function callAgent(msg: AgentMessage): Promise<AgentResponse> {
   return res.json() as Promise<AgentResponse>;
 }
 
+async function callApprove(
+  userId:     string,
+  approvalId: string,
+  decision:   "approve" | "reject",
+): Promise<AgentResponse> {
+  const res = await fetch(`${API}/agent/approve`, {
+    method:  "POST",
+    headers: { "Content-Type": "application/json" },
+    body:    JSON.stringify({ approval_id: approvalId, decision, user_id: userId }),
+  });
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new Error(`Approve API returned ${res.status}: ${errText}`);
+  }
+  return res.json() as Promise<AgentResponse>;
+}
+
+// ── Adaptive Card builder ─────────────────────────────────────────────────────
+
+function buildApprovalCard(ctx: Record<string, unknown>) {
+  const ticker     = String(ctx.ticker     ?? "");
+  const side       = String(ctx.side       ?? "buy").toUpperCase();
+  const qty        = String(ctx.qty        ?? "");
+  const reason     = String(ctx.reason     ?? "");
+  const narrative  = String(ctx.narrative  ?? "");
+  const approvalId = String(ctx.approval_id ?? "");
+
+  return CardFactory.adaptiveCard({
+    type:    "AdaptiveCard",
+    version: "1.4",
+    body: [
+      {
+        type:   "TextBlock",
+        text:   "⚠️ Trade Approval Required",
+        weight: "Bolder",
+        size:   "Large",
+        color:  "Warning",
+      },
+      {
+        type:  "FactSet",
+        facts: [
+          { title: "Ticker",      value: ticker  },
+          { title: "Action",      value: `${side} ${qty} shares` },
+          { title: "Risk Reason", value: reason  },
+        ],
+      },
+      {
+        type: "TextBlock",
+        text: narrative,
+        wrap: true,
+        spacing: "Medium",
+      },
+    ],
+    actions: [
+      {
+        type:  "Action.Submit",
+        title: "✅ Approve",
+        style: "positive",
+        data:  { action: "approve", approval_id: approvalId },
+      },
+      {
+        type:  "Action.Submit",
+        title: "❌ Reject",
+        style: "destructive",
+        data:  { action: "reject", approval_id: approvalId },
+      },
+    ],
+  });
+}
+
 // ── Main bot handler ──────────────────────────────────────────────────────────
 
 export class TeamsBot extends TeamsActivityHandler {
@@ -55,12 +125,42 @@ export class TeamsBot extends TeamsActivityHandler {
     super();
 
     this.onMessage(async (context: TurnContext, next) => {
+      const userId    = context.activity.from?.id         ?? "unknown";
+      const threadId  = context.activity.conversation?.id ?? "";
+      const timestamp = context.activity.timestamp        ?? new Date().toISOString();
+
+      // ── Handle Adaptive Card button submissions ────────────────────────────
+      // When a user clicks Approve/Reject on an approval card, Teams sends
+      // the activity back with activity.value containing the card action data
+      // rather than activity.text.
+      const cardValue = context.activity.value as
+        | { action?: string; approval_id?: string }
+        | undefined;
+
+      if (cardValue?.action && cardValue?.approval_id) {
+        const decision = cardValue.action as "approve" | "reject";
+        console.log(`[teams:${userId}] card action: ${decision} / ${cardValue.approval_id}`);
+
+        try {
+          const response = await callApprove(
+            `teams:${userId}`,
+            cardValue.approval_id,
+            decision,
+          );
+          await context.sendActivity(response.text);
+        } catch (err: unknown) {
+          const message = err instanceof Error ? err.message : String(err);
+          console.error(`Approve error for [teams:${userId}]:`, message);
+          await context.sendActivity(`❌ Error: ${message}`);
+        }
+
+        await next();
+        return;
+      }
+
+      // ── Handle normal text messages ────────────────────────────────────────
       const rawText  = TurnContext.removeRecipientMention(context.activity) ?? "";
       const userText = rawText.replace(/\n|\r/g, "").trim();
-
-      const userId   = context.activity.from?.id          ?? "unknown";
-      const threadId = context.activity.conversation?.id  ?? "";
-      const timestamp = context.activity.timestamp        ?? new Date().toISOString();
 
       console.log(`[teams:${userId}] ${userText}`);
 
@@ -74,7 +174,15 @@ export class TeamsBot extends TeamsActivityHandler {
 
       try {
         const response = await callAgent(msg);
-        await context.sendActivity(response.text);
+
+        if (response.requires_approval && response.approval_context) {
+          // Send the risk narrative as text first, then the approval card
+          await context.sendActivity(response.text);
+          const card = buildApprovalCard(response.approval_context);
+          await context.sendActivity(MessageFactory.attachment(card));
+        } else {
+          await context.sendActivity(response.text);
+        }
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);
         console.error(`Agent error for [teams:${userId}]:`, message);

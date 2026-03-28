@@ -35,6 +35,7 @@ load_dotenv(_AGENTS_ROOT / "stock-analysis-agent" / ".env")
 
 from orchestrator.contracts import AgentMessage, AgentResponse
 from orchestrator.risk_agent import evaluate_proposal, Verdict
+from orchestrator.approval_manager import store_pending
 from stock_agent.agent import run_analysis
 from stock_agent.trading_agent import run_trading_agent, monitor_positions
 from stock_agent.reflection import reflect
@@ -288,13 +289,23 @@ def _dispatch_full(
 
         escalation_context = None
         for t, r in escalated:
+            # Persist the proposal so POST /agent/approve can resume it
+            approval_id = store_pending(
+                ticker    = t,
+                side      = "buy",
+                qty       = r.adjusted_qty,
+                reason    = r.reason,
+                narrative = r.narrative,
+                user_id   = user_id,
+            )
             lines.append(f"⚠️ **{t} ESCALATED** — Human approval required\n{r.narrative}")
             escalation_context = {
-                "ticker":   t,
-                "side":     "buy",
-                "qty":      r.adjusted_qty,
-                "reason":   r.reason,
-                "narrative": r.narrative,
+                "approval_id": approval_id,
+                "ticker":      t,
+                "side":        "buy",
+                "qty":         r.adjusted_qty,
+                "reason":      r.reason,
+                "narrative":   r.narrative,
             }
 
         if approved:
