@@ -1,0 +1,28 @@
+# config/target_allocation.yaml
+#
+# Target portfolio allocation for the rebalancing optimizer.
+# Percentages represent the desired fraction of total equity per position.
+# All entries must sum to <= 1.0 — the remainder stays as cash.
+#
+# Run "Optimize" in Teams to generate a rebalancing plan based on this config.
+# Run "Allocation" to view the current config.
+
+allocations:
+  AAPL:  0.15   # 15% — Apple
+  NVDA:  0.12   # 12% — Nvidia
+  MSFT:  0.10   # 10% — Microsoft
+  AMZN:  0.08   # 8%  — Amazon
+  GOOGL: 0.07   # 7%  — Alphabet
+  # Total: 52%  |  Cash / buying power: 48%
+
+settings:
+  # Minimum dollar value for a single rebalancing trade.
+  # Positions drifting by less than this are left alone to avoid micro-trades.
+  min_trade_value: 50.0
+
+  # Keep at least this fraction of equity as cash after all buys are placed.
+  cash_buffer_pct: 0.05
+
+  # If true, generate SELL orders for positions not in the allocation list.
+  # Set to false (default) to leave untracked positions untouched.
+  reduce_untracked: false

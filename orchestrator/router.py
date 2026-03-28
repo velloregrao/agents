@@ -61,7 +61,7 @@ _client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 _VALID_INTENTS = frozenset({
     "analyze", "research", "trade", "portfolio",
     "reflect", "monitor", "help", "unknown",
-    "watch", "unwatch", "watchlist", "earnings", "mtf",
+    "watch", "unwatch", "watchlist", "earnings", "mtf", "optimize",
 })
 
 _CLASSIFIER_SYSTEM = """You are an intent classifier for a stock trading assistant.
@@ -80,6 +80,7 @@ Intents:
   watchlist → user wants to see their current watchlist
   earnings  → user wants upcoming earnings dates, estimates, or pre-earnings thesis for a stock
   mtf       → user wants multi-timeframe (15m/daily/weekly) technical analysis of a stock
+  optimize  → user wants to rebalance or optimize their portfolio against a target allocation
   help      → greeting, or asking what the bot can do
   unknown   → message does not match any category
 
@@ -92,6 +93,7 @@ Disambiguation:
   - analyze vs research: research implies a recommendation or decision is needed
   - trade vs analyze: trade implies the user wants orders placed, not just information
   - mtf vs analyze: mtf is explicitly multi-timeframe (15m + daily + weekly); use analyze for single-timeframe
+  - optimize vs portfolio: portfolio is read-only; optimize implies generating a rebalancing plan
 
 Respond with valid JSON only — no explanation, no markdown fences:
 {"intent": "analyze", "tickers": ["AAPL"]}"""
@@ -146,6 +148,7 @@ _SKIP_WORDS = frozenset({
     "RUN", "CHECK", "MY", "WATCH", "UNWATCH", "TRACK", "FOLLOW",
     "WATCHLIST", "REMOVE", "ADD", "STOP", "EARNINGS", "WHEN", "REPORT",
     "UPCOMING", "REPORTS", "DOES", "MTF", "MULTI", "TIMEFRAME",
+    "OPTIMIZE", "REBALANCE", "ALLOCATION",
 })
 
 
@@ -167,6 +170,8 @@ def _parse_intent_fallback(text: str) -> tuple[str, list[str]]:
         return "reflect", []
     if re.search(r"mtf|multi.?timeframe|multi.?tf|all.?timeframe", text, re.IGNORECASE):
         return "mtf", tickers
+    if re.search(r"optimize|optimise|rebalance|re.?balance|allocation|target.*alloc", text, re.IGNORECASE):
+        return "optimize", []
     if re.search(r"earnings|when.*report|upcoming.*earn|earn.*date|report.*date", text, re.IGNORECASE):
         return "earnings", tickers
     if re.search(r"unwatch|stop\s+watch|stop\s+track|remove.*watch", text, re.IGNORECASE) and tickers:
@@ -269,7 +274,8 @@ def _dispatch_full(
             "- **Monitor** — Review open positions for exits\n"
             "- **Watch AAPL NVDA** — Add tickers to proactive watchlist\n"
             "- **Earnings AAPL** — Pre-earnings thesis and estimates\n"
-            "- **MTF AAPL** — Multi-timeframe analysis (15m + daily + weekly)\n\n"
+            "- **MTF AAPL** — Multi-timeframe analysis (15m + daily + weekly)\n"
+            "- **Optimize** — Generate a portfolio rebalancing plan (requires approval)\n\n"
             "*Powered by Claude + Alpaca paper trading*"
         ), False, None
 
@@ -353,6 +359,22 @@ def _dispatch_full(
                 "",
             ]
         return "\n".join(lines), False, None
+
+    if intent == "optimize":
+        from orchestrator.portfolio_optimizer import build_rebalance_plan, format_plan_markdown
+        try:
+            plan = build_rebalance_plan(user_id)
+            text = format_plan_markdown(plan)
+            return (
+                f"{text}\n\n"
+                f"*Plan ID: `{plan.plan_id}`*\n\n"
+                f"⏳ **This plan requires your approval before any trades are executed.** "
+                f"You'll receive an approval card shortly — or type **Allocation** to view the target config."
+            ), False, None
+        except ValueError as exc:
+            return f"ℹ️ {exc}", False, None
+        except Exception as exc:
+            return f"❌ Optimizer error: {exc}", False, None
 
     if intent == "mtf":
         from orchestrator.mtf_agent import analyze_ticker_mtf, analyze_tickers_mtf, format_mtf_markdown

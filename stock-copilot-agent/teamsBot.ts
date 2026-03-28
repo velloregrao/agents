@@ -76,12 +76,41 @@ interface EarningsPayload {
   sentiment:        string;
 }
 
+interface RebalanceTrade {
+  ticker:       string;
+  side:         string;
+  adjusted_qty: number;
+  trade_value:  number;
+  current_pct:  number;
+  target_pct:   number;
+  drift_pct:    number;
+  risk_verdict: string;
+}
+
+interface RebalanceBlocked {
+  ticker:    string;
+  side:      string;
+  risk_note: string;
+}
+
+interface RebalancePayload {
+  plan_id:          string;
+  equity:           number;
+  cash:             number;
+  trades:           RebalanceTrade[];
+  blocked:          RebalanceBlocked[];
+  total_sell_value: number;
+  total_buy_value:  number;
+  net_cash_change:  number;
+  rationale:        string;
+}
+
 interface PendingAlert {
   id:               number;
   user_id:          string;
   ticker:           string;
-  alert_type:       string;          // "signal" | "earnings"
-  signal:           SignalPayload | EarningsPayload;
+  alert_type:       string;          // "signal" | "earnings" | "rebalance"
+  signal:           SignalPayload | EarningsPayload | RebalancePayload;
   risk:             RiskPayload;
   proposed_qty:     number;
   created_at:       string;
@@ -118,6 +147,26 @@ async function callApprove(
     throw new Error(`Approve API returned ${res.status}: ${errText}`);
   }
   return res.json() as Promise<AgentResponse>;
+}
+
+async function callRebalanceExecute(
+  planId: string,
+  userId: string,
+): Promise<{ summary: string; executed: string[]; failed: string[] }> {
+  const res = await fetch(`${API}/portfolio/rebalance/${planId}/execute`, {
+    method:  "POST",
+    headers: { "Content-Type": "application/json" },
+    body:    JSON.stringify({ user_id: userId }),
+  });
+  if (!res.ok) {
+    const errText = await res.text();
+    throw new Error(`Rebalance execute returned ${res.status}: ${errText}`);
+  }
+  return res.json();
+}
+
+async function callRebalanceReject(planId: string): Promise<void> {
+  await fetch(`${API}/portfolio/rebalance/${planId}/reject`, { method: "POST" });
 }
 
 async function storeConversationRef(
@@ -352,6 +401,87 @@ function buildEarningsCard(alert: PendingAlert) {
   });
 }
 
+function buildRebalanceCard(alert: PendingAlert) {
+  const p      = alert.signal as RebalancePayload;
+  const { id } = alert;
+
+  const verdictBadge: Record<string, string> = {
+    APPROVED: "✅", RESIZE: "🔄", ESCALATE: "⚠️",
+  };
+
+  // Build one fact row per trade
+  const tradeFacts = p.trades.map((t) => {
+    const badge   = verdictBadge[t.risk_verdict] ?? "";
+    const sideStr = t.side.toUpperCase();
+    const driftStr = `${(t.drift_pct * 100).toFixed(1)}%`;
+    return {
+      title: `${t.ticker} ${sideStr} ${badge}`,
+      value: `${t.adjusted_qty} sh — $${t.trade_value.toLocaleString("en-US", { maximumFractionDigits: 0 })} | drift ${driftStr} → ${(t.target_pct * 100).toFixed(0)}%`,
+    };
+  });
+
+  const blockedStr = p.blocked.length > 0
+    ? `⛔ Blocked: ${p.blocked.map((b) => b.ticker).join(", ")}`
+    : "";
+
+  const netSign   = p.net_cash_change >= 0 ? "+" : "";
+  const summaryStr =
+    `**Equity:** $${p.equity.toLocaleString("en-US", { maximumFractionDigits: 0 })}  |  ` +
+    `**Sells:** $${p.total_sell_value.toLocaleString("en-US", { maximumFractionDigits: 0 })}  |  ` +
+    `**Buys:** $${p.total_buy_value.toLocaleString("en-US", { maximumFractionDigits: 0 })}  |  ` +
+    `**Net cash:** ${netSign}$${Math.abs(p.net_cash_change).toLocaleString("en-US", { maximumFractionDigits: 0 })}`;
+
+  return CardFactory.adaptiveCard({
+    type:    "AdaptiveCard",
+    version: "1.4",
+    body: [
+      {
+        type:   "TextBlock",
+        text:   "📊 Portfolio Rebalancing Plan — Approval Required",
+        weight: "Bolder",
+        size:   "Large",
+        color:  "Accent",
+      },
+      {
+        type:    "TextBlock",
+        text:    summaryStr,
+        wrap:    true,
+        spacing: "Small",
+      },
+      ...(tradeFacts.length > 0 ? [{ type: "FactSet", facts: tradeFacts }] : []),
+      ...(blockedStr ? [{
+        type:     "TextBlock",
+        text:     blockedStr,
+        wrap:     true,
+        spacing:  "Small",
+        isSubtle: true,
+        color:    "Attention",
+      }] : []),
+      {
+        type:     "TextBlock",
+        text:     p.rationale,
+        wrap:     true,
+        spacing:  "Medium",
+        isSubtle: true,
+      },
+    ],
+    actions: [
+      {
+        type:  "Action.Submit",
+        title: `✅ Approve & Execute (${p.trades.length} trade${p.trades.length !== 1 ? "s" : ""})`,
+        style: "positive",
+        data:  { action: "approve_rebalance", plan_id: p.plan_id, alert_id: id },
+      },
+      {
+        type:  "Action.Submit",
+        title: "❌ Reject Plan",
+        style: "destructive",
+        data:  { action: "reject_rebalance", plan_id: p.plan_id, alert_id: id },
+      },
+    ],
+  });
+}
+
 // ── Main bot handler ──────────────────────────────────────────────────────────
 
 export class TeamsBot extends TeamsActivityHandler {
@@ -377,7 +507,7 @@ export class TeamsBot extends TeamsActivityHandler {
 
       // ── Handle Adaptive Card button submissions ────────────────────────────
       const cardValue = context.activity.value as
-        | { action?: string; approval_id?: string; ticker?: string; qty?: number; side?: string; alert_id?: number }
+        | { action?: string; approval_id?: string; plan_id?: string; ticker?: string; qty?: number; side?: string; alert_id?: number }
         | undefined;
 
       if (cardValue?.action) {
@@ -455,6 +585,50 @@ export class TeamsBot extends TeamsActivityHandler {
         if (action === "dismiss_alert" && cardValue.alert_id) {
           await markAlertDelivered(cardValue.alert_id).catch(() => {});
           await context.sendActivity(`✓ Alert dismissed.`);
+          await next();
+          return;
+        }
+
+        // Rebalance card: Approve & Execute
+        if (action === "approve_rebalance" && cardValue.plan_id) {
+          if (cardValue.alert_id) await markAlertDelivered(cardValue.alert_id).catch(() => {});
+          console.log(`[teams:${userId}] rebalance approve: ${cardValue.plan_id}`);
+          try {
+            const result = await callRebalanceExecute(cardValue.plan_id, teamsBotId);
+            const lines = [
+              `✅ **Rebalancing plan executed!** ${result.summary}`,
+            ];
+            if (result.executed.length > 0) {
+              lines.push("", "**Executed:**");
+              result.executed.forEach((t) => lines.push(`- ${t}`));
+            }
+            if (result.failed.length > 0) {
+              lines.push("", "**⚠️ Failed:**");
+              result.failed.forEach((t) => lines.push(`- ${t}`));
+            }
+            await context.sendActivity(lines.join("\n"));
+          } catch (err: unknown) {
+            const message = err instanceof Error ? err.message : String(err);
+            await context.sendActivity(`❌ Rebalance execute error: ${message}`);
+          }
+          await next();
+          return;
+        }
+
+        // Rebalance card: Reject Plan
+        if (action === "reject_rebalance" && cardValue.plan_id) {
+          if (cardValue.alert_id) await markAlertDelivered(cardValue.alert_id).catch(() => {});
+          console.log(`[teams:${userId}] rebalance reject: ${cardValue.plan_id}`);
+          try {
+            await callRebalanceReject(cardValue.plan_id);
+            await context.sendActivity(
+              `❌ **Rebalancing plan rejected.** No trades were placed.\n\n` +
+              `Type **Optimize** to generate a new plan, or **Allocation** to review your target config.`,
+            );
+          } catch (err: unknown) {
+            const message = err instanceof Error ? err.message : String(err);
+            await context.sendActivity(`❌ Reject error: ${message}`);
+          }
           await next();
           return;
         }
@@ -551,6 +725,8 @@ export class TeamsBot extends TeamsActivityHandler {
           async (proactiveCtx: TurnContext) => {
             const card = alert.alert_type === "earnings"
               ? buildEarningsCard(alert)
+              : alert.alert_type === "rebalance"
+              ? buildRebalanceCard(alert)
               : buildSignalCard(alert);
             await proactiveCtx.sendActivity(MessageFactory.attachment(card));
           },

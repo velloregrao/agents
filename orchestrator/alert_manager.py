@@ -259,3 +259,129 @@ def mark_alert_delivered(alert_id: int) -> None:
             "UPDATE alert_queue SET delivered_at = ? WHERE id = ?",
             (now, alert_id),
         )
+
+
+# ── Rebalance plan store (Phase 8) ─────────────────────────────────────────────
+
+def _ensure_rebalance_table() -> None:
+    """Create rebalance_proposals table if it doesn't exist."""
+    with _conn() as c:
+        c.execute("""
+            CREATE TABLE IF NOT EXISTS rebalance_proposals (
+                plan_id      TEXT PRIMARY KEY,
+                user_id      TEXT    NOT NULL,
+                plan_json    TEXT    NOT NULL,
+                created_at   TEXT    NOT NULL,
+                executed_at  TEXT
+            )
+        """)
+
+
+def store_rebalance_plan(plan) -> None:
+    """
+    Persist a RebalancePlan to the rebalance_proposals table.
+
+    plan must be a RebalancePlan dataclass instance. The full plan is
+    stored as JSON so execution can be resumed without re-running the
+    generator/critic pipeline.
+    """
+    from dataclasses import asdict
+    _ensure_rebalance_table()
+    plan_dict = asdict(plan)
+    with _conn() as c:
+        c.execute(
+            """
+            INSERT INTO rebalance_proposals (plan_id, user_id, plan_json, created_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT (plan_id) DO UPDATE
+                SET plan_json  = excluded.plan_json,
+                    created_at = excluded.created_at
+            """,
+            (plan.plan_id, plan.user_id, json.dumps(plan_dict), plan.created_at),
+        )
+
+
+def get_rebalance_plan(plan_id: str) -> dict | None:
+    """
+    Retrieve a stored rebalance plan by plan_id.
+
+    Returns None if the plan is not found or has already been executed.
+    Returns the full plan as a dict (same structure as RebalancePlan.__dict__).
+    """
+    _ensure_rebalance_table()
+    with _conn() as c:
+        row = c.execute(
+            "SELECT plan_json, executed_at FROM rebalance_proposals WHERE plan_id = ?",
+            (plan_id,),
+        ).fetchone()
+    if not row:
+        return None
+    if row["executed_at"]:
+        return None  # already executed
+    return json.loads(row["plan_json"])
+
+
+def mark_rebalance_executed(plan_id: str) -> None:
+    """Mark a rebalance plan as executed (sets executed_at timestamp)."""
+    _ensure_rebalance_table()
+    now = datetime.now(timezone.utc).isoformat()
+    with _conn() as c:
+        c.execute(
+            "UPDATE rebalance_proposals SET executed_at = ? WHERE plan_id = ?",
+            (now, plan_id),
+        )
+
+
+def queue_rebalance_alert(user_id: str, plan) -> int:
+    """
+    Persist a rebalance plan alert to the alert_queue with alert_type='rebalance'.
+
+    The plan summary (plan_id, trades, totals, rationale) is stored in
+    signal_json so the Teams bot can build the approval card without importing
+    RebalancePlan. risk_json is unused for rebalance alerts (set to '{}').
+
+    Returns the new alert_id.
+    """
+    initialize_db()
+    now = datetime.now(timezone.utc).isoformat()
+
+    trades_summary = [
+        {
+            "ticker":       t.ticker,
+            "side":         t.side,
+            "adjusted_qty": t.adjusted_qty,
+            "trade_value":  t.trade_value,
+            "current_pct":  t.current_pct,
+            "target_pct":   t.target_pct,
+            "drift_pct":    t.drift_pct,
+            "risk_verdict": t.risk_verdict,
+        }
+        for t in plan.trades
+    ]
+    blocked_summary = [
+        {"ticker": b.ticker, "side": b.side, "risk_note": b.risk_note}
+        for b in plan.blocked
+    ]
+
+    payload_json = json.dumps({
+        "plan_id":          plan.plan_id,
+        "equity":           plan.equity,
+        "cash":             plan.cash,
+        "trades":           trades_summary,
+        "blocked":          blocked_summary,
+        "total_sell_value": plan.total_sell_value,
+        "total_buy_value":  plan.total_buy_value,
+        "net_cash_change":  plan.net_cash_change,
+        "rationale":        plan.rationale,
+    })
+
+    with _conn() as c:
+        cursor = c.execute(
+            """
+            INSERT INTO alert_queue
+              (user_id, ticker, signal_json, risk_json, proposed_qty, created_at, alert_type)
+            VALUES (?, ?, ?, ?, ?, ?, 'rebalance')
+            """,
+            (user_id, "PORTFOLIO", payload_json, "{}", 0, now),
+        )
+        return cursor.lastrowid

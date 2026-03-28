@@ -667,6 +667,130 @@ def earnings_scan_run_now():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ── Portfolio Optimizer endpoints (Phase 8) ───────────────────────────────────
+
+class OptimizeRequest(BaseModel):
+    user_id: str
+
+
+class RebalanceExecuteRequest(BaseModel):
+    user_id: str
+
+
+def _serialise_trade_proposals(trades) -> list[dict]:
+    """Convert TradeProposal objects to JSON-serialisable dicts."""
+    return [
+        {
+            "ticker":        t.ticker,
+            "side":          t.side,
+            "proposed_qty":  t.proposed_qty,
+            "adjusted_qty":  t.adjusted_qty,
+            "current_price": t.current_price,
+            "trade_value":   t.trade_value,
+            "current_pct":   t.current_pct,
+            "target_pct":    t.target_pct,
+            "drift_pct":     t.drift_pct,
+            "risk_verdict":  t.risk_verdict,
+            "risk_note":     t.risk_note,
+        }
+        for t in trades
+    ]
+
+
+@app.post("/portfolio/optimize")
+def portfolio_optimize(req: OptimizeRequest):
+    """
+    Build a portfolio rebalancing plan against the target allocation config.
+
+    Generator → critic → refinement → Sonnet rationale → stored in DB
+    and queued as a rebalance alert for Teams approval.
+
+    Returns the plan summary including plan_id (needed to approve/reject).
+    Never executes trades — execution requires explicit approval.
+    """
+    try:
+        from orchestrator.portfolio_optimizer import build_rebalance_plan, format_plan_markdown
+        plan = build_rebalance_plan(req.user_id)
+        return {
+            "plan_id":          plan.plan_id,
+            "user_id":          plan.user_id,
+            "equity":           plan.equity,
+            "cash":             plan.cash,
+            "total_sell_value": plan.total_sell_value,
+            "total_buy_value":  plan.total_buy_value,
+            "net_cash_change":  plan.net_cash_change,
+            "rationale":        plan.rationale,
+            "trades":           _serialise_trade_proposals(plan.trades),
+            "blocked":          _serialise_trade_proposals(plan.blocked),
+            "markdown":         format_plan_markdown(plan),
+            "created_at":       plan.created_at,
+        }
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/portfolio/rebalance/{plan_id}/execute")
+def portfolio_rebalance_execute(plan_id: str, req: RebalanceExecuteRequest):
+    """
+    Execute an approved rebalancing plan.
+
+    Fetches the plan from DB, places sells first (to free cash), then buys.
+    Only callable after the user has approved the plan via the Teams card.
+
+    Returns a summary of executed and failed trades.
+    """
+    try:
+        from orchestrator.portfolio_optimizer import execute_rebalance_plan
+        result = execute_rebalance_plan(plan_id)
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/portfolio/rebalance/{plan_id}/reject", status_code=204)
+def portfolio_rebalance_reject(plan_id: str):
+    """
+    Reject (cancel) a pending rebalancing plan.
+
+    Marks the plan as executed (with no trades) so it cannot be executed later.
+    Called by the Teams bot when the user clicks the Reject button on the card.
+    """
+    try:
+        from orchestrator.alert_manager import mark_rebalance_executed
+        mark_rebalance_executed(plan_id)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/portfolio/allocation")
+def portfolio_allocation():
+    """
+    Return the current target allocation config from config/target_allocation.yaml.
+
+    Useful for displaying the allocation in Teams before running Optimize.
+    """
+    try:
+        from orchestrator.portfolio_optimizer import load_target_allocation
+        cfg = load_target_allocation()
+        allocs = cfg.get("allocations", {})
+        total  = sum(allocs.values())
+        return {
+            "allocations": {
+                k: {"target_pct": v, "target_pct_display": f"{v*100:.0f}%"}
+                for k, v in allocs.items()
+            },
+            "total_allocated":    round(total, 4),
+            "cash_remainder":     round(1.0 - total, 4),
+            "settings":           cfg.get("settings", {}),
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # ── Local dev entry point ─────────────────────────────────────────────────────
 
 if __name__ == "__main__":
