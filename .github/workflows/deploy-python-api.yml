@@ -5,6 +5,7 @@ on:
     branches: [main]
     paths:
       - "stock-analysis-agent/**"
+      - "orchestrator/**"
       - ".github/workflows/deploy-python-api.yml"
 
 jobs:
