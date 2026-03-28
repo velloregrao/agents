@@ -23,11 +23,19 @@ from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).resolve().parent.parent.parent / ".env", override=True)
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 import anthropic
+
+# ── API key auth ───────────────────────────────────────────────────────────────
+# Set AGENT_API_KEY in .env to require X-API-Key header on all requests.
+# Leave unset (or empty) for open access during local development.
+# Health endpoints are always exempt so liveness probes never need a key.
+
+_API_KEY = os.getenv("AGENT_API_KEY", "").strip() or None
+_AUTH_EXEMPT = {"/health", "/health/deep"}
 
 from stock_agent.tools import (
     get_stock_info,
@@ -74,6 +82,31 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def api_key_middleware(request: Request, call_next):
+    """
+    Enforce X-API-Key header when AGENT_API_KEY is configured.
+
+    Exempt paths (/health, /health/deep) bypass auth so container liveness
+    probes and load-balancer checks never need a key.
+
+    When AGENT_API_KEY is not set the middleware is a transparent no-op,
+    keeping local development zero-friction.
+    """
+    if _API_KEY and request.url.path not in _AUTH_EXEMPT:
+        provided = (
+            request.headers.get("X-API-Key")
+            or request.query_params.get("api_key")
+        )
+        if provided != _API_KEY:
+            return JSONResponse(
+                status_code=401,
+                content={"detail": "Invalid or missing API key. Pass X-API-Key header."},
+            )
+    return await call_next(request)
+
 
 _client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 
