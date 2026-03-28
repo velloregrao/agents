@@ -4,8 +4,15 @@ WORKDIR /app
 
 RUN pip install uv
 
-COPY pyproject.toml .
-COPY src/ src/
+# Build context is the repo root (docker build -f stock-analysis-agent/Dockerfile .)
+# so paths are relative to agents/.
+COPY stock-analysis-agent/pyproject.toml .
+COPY stock-analysis-agent/src/ src/
+
+# orchestrator/ is imported by api.py at runtime — must be present in the image.
+# api.py computes _AGENTS_ROOT and inserts /app into sys.path, so placing
+# orchestrator/ at /app/orchestrator/ makes it importable.
+COPY orchestrator/ orchestrator/
 
 # Install all dependencies (includes fastapi + uvicorn + alpaca-py)
 RUN uv pip install --system -e .

@@ -37,11 +37,14 @@ jobs:
 
       - name: Build and push image
         run: |
+          # Build context is repo root so orchestrator/ (outside stock-analysis-agent/)
+          # can be COPY'd into the image alongside the Python package.
           docker build \
             --platform linux/amd64 \
+            -f ./stock-analysis-agent/Dockerfile \
             -t ${{ secrets.ACR_LOGIN_SERVER }}/python-api:${{ github.sha }} \
             -t ${{ secrets.ACR_LOGIN_SERVER }}/python-api:latest \
-            ./stock-analysis-agent
+            .
           docker push ${{ secrets.ACR_LOGIN_SERVER }}/python-api:${{ github.sha }}
           docker push ${{ secrets.ACR_LOGIN_SERVER }}/python-api:latest
 
