@@ -134,7 +134,14 @@ def fetch_earnings_calendar(ticker: str, days_ahead: int = EARNINGS_LOOKAHEAD_DA
         return None
 
     try:
-        if hasattr(raw_date, "date"):
+        if isinstance(raw_date, datetime):
+            # datetime.datetime subclasses date — call .date() to get a pure date
+            earnings_date = raw_date.date()
+        elif isinstance(raw_date, date):
+            # plain datetime.date — use as-is (yfinance ≥ 0.2.x returns these)
+            earnings_date = raw_date
+        elif hasattr(raw_date, "date"):
+            # pd.Timestamp or other objects with a .date() method
             earnings_date = raw_date.date()
         elif isinstance(raw_date, str):
             earnings_date = date.fromisoformat(raw_date[:10])

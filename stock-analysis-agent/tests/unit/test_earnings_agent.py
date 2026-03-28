@@ -128,6 +128,24 @@ class TestFetchEarningsCalendar:
         assert result["days_until"] == 7
 
     @patch("orchestrator.earnings_agent.yf")
+    def test_plain_date_object_handled(self, mock_yf):
+        """yfinance ≥ 0.2.x returns plain datetime.date objects, not pd.Timestamps."""
+        from datetime import date as _date
+        cal = {
+            "Earnings Date":    [_date.today() + timedelta(days=3)],
+            "Earnings Average": 1.50,
+            "Earnings Low":     1.40,
+            "Earnings High":    1.60,
+            "Revenue Average":  50_000_000_000.0,
+        }
+        t = MagicMock()
+        t.calendar = cal
+        mock_yf.Ticker.return_value = t
+        result = fetch_earnings_calendar("AAPL", days_ahead=7)
+        assert result is not None
+        assert result["days_until"] == 3
+
+    @patch("orchestrator.earnings_agent.yf")
     def test_earnings_date_isoformat(self, mock_yf):
         mock_yf.Ticker.return_value = _mock_ticker(_cal_dict(days_from_now=4))
         result = fetch_earnings_calendar("AAPL")
