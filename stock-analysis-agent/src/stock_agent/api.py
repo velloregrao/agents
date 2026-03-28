@@ -41,6 +41,7 @@ from stock_agent.memory import (
     get_performance_summary,
     initialize_db,
 )
+from stock_agent.watchlist import initialize_db as initialize_watchlist_db
 from stock_agent.agent import run_analysis
 from stock_agent.trading_agent import run_trading_agent, monitor_positions
 from stock_agent.reflection import reflect
@@ -70,6 +71,7 @@ _client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 @app.on_event("startup")
 def startup():
     initialize_db()
+    initialize_watchlist_db()
 
 
 # ── Request models ────────────────────────────────────────────────────────────

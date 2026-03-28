@@ -43,6 +43,11 @@ from stock_agent.research import run_research_orchestrator
 from stock_agent.alpaca_tools import get_account_balance, get_positions
 from stock_agent.tools import get_current_price
 from stock_agent.memory import get_performance_summary
+from stock_agent.watchlist import (
+    add_to_watchlist,
+    remove_from_watchlist,
+    get_watchlist,
+)
 
 # ── Model constants ────────────────────────────────────────────────────────────
 
@@ -56,6 +61,7 @@ _client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 _VALID_INTENTS = frozenset({
     "analyze", "research", "trade", "portfolio",
     "reflect", "monitor", "help", "unknown",
+    "watch", "unwatch", "watchlist",
 })
 
 _CLASSIFIER_SYSTEM = """You are an intent classifier for a stock trading assistant.
@@ -69,6 +75,9 @@ Intents:
   portfolio → user wants to see positions, balance, P&L, or performance stats
   reflect   → user wants to review lessons learned from past trades
   monitor   → user wants to review open positions for potential exits
+  watch     → user wants to add one or more tickers to their watchlist
+  unwatch   → user wants to remove one or more tickers from their watchlist
+  watchlist → user wants to see their current watchlist
   help      → greeting, or asking what the bot can do
   unknown   → message does not match any category
 
@@ -131,7 +140,8 @@ _SKIP_WORDS = frozenset({
     "TELL", "WHAT", "HOW", "IS", "THE", "FOR", "ME", "TRADE", "TRADES",
     "BUY", "SELL", "PORTFOLIO", "PERFORMANCE", "REFLECT", "REFLECTION",
     "MONITOR", "POSITIONS", "HELP", "HI", "HELLO", "AND", "ON", "A",
-    "RUN", "CHECK", "MY",
+    "RUN", "CHECK", "MY", "WATCH", "UNWATCH", "TRACK", "FOLLOW",
+    "WATCHLIST", "REMOVE", "ADD", "STOP",
 })
 
 
@@ -151,6 +161,12 @@ def _parse_intent_fallback(text: str) -> tuple[str, list[str]]:
         return "portfolio", tickers
     if re.search(r"reflect|reflection|lessons|learn", text, re.IGNORECASE):
         return "reflect", []
+    if re.search(r"unwatch|stop\s+watch|stop\s+track|remove.*watch", text, re.IGNORECASE) and tickers:
+        return "unwatch", tickers
+    if re.search(r"watchlist|what.*watch|show.*watch|my.*watch", text, re.IGNORECASE):
+        return "watchlist", []
+    if re.search(r"\bwatch\b|\btrack\b|\bfollow\b", text, re.IGNORECASE) and tickers:
+        return "watch", tickers
     if re.search(r"research|deep.?dive|full.?analysis|recommend", text, re.IGNORECASE) and tickers:
         return "research", tickers
     if re.search(r"trade|buy|sell|invest|run\s+agent", text, re.IGNORECASE) and tickers:
@@ -245,6 +261,57 @@ def _dispatch_full(
             "- **Monitor** — Review open positions for exits\n\n"
             "*Powered by Claude + Alpaca paper trading*"
         ), False, None
+
+    if intent == "watch":
+        if not tickers:
+            return (
+                "Please tell me which tickers to watch. "
+                "Example: **Watch AAPL NVDA MSFT**"
+            ), False, None
+        added = add_to_watchlist(user_id, tickers)
+        watchlist = get_watchlist(user_id)
+        ticker_list = " · ".join(watchlist) if watchlist else "—"
+        return (
+            f"👁 **Watchlist updated** — added: {', '.join(added)}\n\n"
+            f"**Your watchlist ({len(watchlist)} tickers):** {ticker_list}\n\n"
+            f"*The monitor scans every 15 min during market hours (9:30–16:00 ET). "
+            f"Type **Watchlist** to review or **Monitor** to scan positions now.*"
+        ), False, None
+
+    if intent == "unwatch":
+        if not tickers:
+            return (
+                "Please tell me which tickers to remove. "
+                "Example: **Unwatch AAPL**"
+            ), False, None
+        removed = remove_from_watchlist(user_id, tickers)
+        watchlist = get_watchlist(user_id)
+        if not removed:
+            return (
+                f"⚠️ None of those tickers were on your watchlist: "
+                f"{', '.join(tickers)}"
+            ), False, None
+        ticker_list = " · ".join(watchlist) if watchlist else "—"
+        return (
+            f"✅ **Removed from watchlist:** {', '.join(removed)}\n\n"
+            f"**Your watchlist ({len(watchlist)} tickers):** {ticker_list}"
+        ), False, None
+
+    if intent == "watchlist":
+        watchlist = get_watchlist(user_id)
+        if not watchlist:
+            return (
+                "📋 **Your watchlist is empty.**\n\n"
+                "Add tickers with: **Watch AAPL NVDA MSFT**"
+            ), False, None
+        lines = [f"## 👁 Your Watchlist ({len(watchlist)} tickers)\n"]
+        for ticker in watchlist:
+            lines.append(f"- **{ticker}**")
+        lines.append(
+            "\n*Scanned every 15 min during market hours (9:30–16:00 ET). "
+            "You'll be alerted when a signal fires and clears the risk gate.*"
+        )
+        return "\n".join(lines), False, None
 
     if intent == "analyze" and tickers:
         return run_analysis(tickers[0]), False, None
