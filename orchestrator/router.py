@@ -61,7 +61,7 @@ _client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 _VALID_INTENTS = frozenset({
     "analyze", "research", "trade", "portfolio",
     "reflect", "monitor", "help", "unknown",
-    "watch", "unwatch", "watchlist", "earnings",
+    "watch", "unwatch", "watchlist", "earnings", "mtf",
 })
 
 _CLASSIFIER_SYSTEM = """You are an intent classifier for a stock trading assistant.
@@ -79,6 +79,7 @@ Intents:
   unwatch   → user wants to remove one or more tickers from their watchlist
   watchlist → user wants to see their current watchlist
   earnings  → user wants upcoming earnings dates, estimates, or pre-earnings thesis for a stock
+  mtf       → user wants multi-timeframe (15m/daily/weekly) technical analysis of a stock
   help      → greeting, or asking what the bot can do
   unknown   → message does not match any category
 
@@ -90,6 +91,7 @@ Ticker extraction rules:
 Disambiguation:
   - analyze vs research: research implies a recommendation or decision is needed
   - trade vs analyze: trade implies the user wants orders placed, not just information
+  - mtf vs analyze: mtf is explicitly multi-timeframe (15m + daily + weekly); use analyze for single-timeframe
 
 Respond with valid JSON only — no explanation, no markdown fences:
 {"intent": "analyze", "tickers": ["AAPL"]}"""
@@ -143,7 +145,7 @@ _SKIP_WORDS = frozenset({
     "MONITOR", "POSITIONS", "HELP", "HI", "HELLO", "AND", "ON", "A",
     "RUN", "CHECK", "MY", "WATCH", "UNWATCH", "TRACK", "FOLLOW",
     "WATCHLIST", "REMOVE", "ADD", "STOP", "EARNINGS", "WHEN", "REPORT",
-    "UPCOMING", "REPORTS", "DOES",
+    "UPCOMING", "REPORTS", "DOES", "MTF", "MULTI", "TIMEFRAME",
 })
 
 
@@ -163,6 +165,8 @@ def _parse_intent_fallback(text: str) -> tuple[str, list[str]]:
         return "portfolio", tickers
     if re.search(r"reflect|reflection|lessons|learn", text, re.IGNORECASE):
         return "reflect", []
+    if re.search(r"mtf|multi.?timeframe|multi.?tf|all.?timeframe", text, re.IGNORECASE):
+        return "mtf", tickers
     if re.search(r"earnings|when.*report|upcoming.*earn|earn.*date|report.*date", text, re.IGNORECASE):
         return "earnings", tickers
     if re.search(r"unwatch|stop\s+watch|stop\s+track|remove.*watch", text, re.IGNORECASE) and tickers:
@@ -264,7 +268,8 @@ def _dispatch_full(
             "- **Reflect** — Extract lessons from trade history\n"
             "- **Monitor** — Review open positions for exits\n"
             "- **Watch AAPL NVDA** — Add tickers to proactive watchlist\n"
-            "- **Earnings AAPL** — Pre-earnings thesis and estimates\n\n"
+            "- **Earnings AAPL** — Pre-earnings thesis and estimates\n"
+            "- **MTF AAPL** — Multi-timeframe analysis (15m + daily + weekly)\n\n"
             "*Powered by Claude + Alpaca paper trading*"
         ), False, None
 
@@ -348,6 +353,21 @@ def _dispatch_full(
                 "",
             ]
         return "\n".join(lines), False, None
+
+    if intent == "mtf":
+        from orchestrator.mtf_agent import analyze_ticker_mtf, analyze_tickers_mtf, format_mtf_markdown
+        scan_tickers = tickers if tickers else get_watchlist(user_id)
+        if not scan_tickers:
+            return (
+                "Please specify a ticker for MTF analysis. Example: **MTF AAPL**\n\n"
+                "Or add tickers to your watchlist first with **Watch AAPL NVDA**."
+            ), False, None
+        if len(scan_tickers) == 1:
+            result  = analyze_ticker_mtf(scan_tickers[0])
+            results = [result]
+        else:
+            results = analyze_tickers_mtf(scan_tickers)
+        return "\n\n---\n\n".join(format_mtf_markdown(r) for r in results), False, None
 
     if intent == "analyze" and tickers:
         return run_analysis(tickers[0]), False, None

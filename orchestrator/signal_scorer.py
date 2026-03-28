@@ -33,6 +33,10 @@ load_dotenv(_AGENTS_ROOT / "stock-analysis-agent" / ".env")
 sys.path.insert(0, str(_AGENTS_ROOT / "stock-analysis-agent" / "src"))
 
 from stock_agent.tools import get_technical_indicators, get_current_price
+from orchestrator.indicators import (
+    score_rsi, score_trend, score_macd,
+    score_bollinger, score_volume, score_momentum, build_summary,
+)
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
@@ -66,139 +70,30 @@ class SignalScore:
     rsi:        float
 
 
-# ── Component scorers (each returns (score, reason_string)) ───────────────────
+# ── Component scorers ─────────────────────────────────────────────────────────
+# Thin wrappers kept for backward compatibility with any callers that imported
+# the private names directly.  All logic lives in orchestrator/indicators.py.
 
 def _score_rsi(rsi: float) -> tuple[float, str]:
-    """
-    RSI < 30 = oversold → bullish.  RSI > 70 = overbought → bearish.
-    Two tiers each side; max ±2.5.
-    """
-    if rsi < 30:
-        return +2.5, f"RSI {rsi:.1f} — oversold"
-    if rsi < 45:
-        return +1.0, f"RSI {rsi:.1f} — mildly oversold"
-    if rsi > 70:
-        return -2.5, f"RSI {rsi:.1f} — overbought"
-    if rsi > 55:
-        return -1.0, f"RSI {rsi:.1f} — mildly overbought"
-    return 0.0, f"RSI {rsi:.1f} — neutral"
-
+    return score_rsi(rsi)
 
 def _score_trend(price: float, sma_50: float | None) -> tuple[float, str]:
-    """
-    Price above 50-day SMA = uptrend (+1.5).
-    Price below 50-day SMA = downtrend (−1.5).
-    If SMA50 is unavailable (< 50 days of history), score 0.
-    """
-    if sma_50 is None:
-        return 0.0, "SMA50 unavailable"
-    if price > sma_50:
-        return +1.5, f"above SMA50 ({sma_50:.2f})"
-    return -1.5, f"below SMA50 ({sma_50:.2f})"
-
+    return score_trend(price, sma_50, label="SMA50")
 
 def _score_macd(macd_line: float, macd_signal: float) -> tuple[float, str]:
-    """
-    MACD line above signal line = bullish momentum (+1.5).
-    MACD line below signal line = bearish momentum (−1.5).
-    """
-    if macd_line > macd_signal:
-        return +1.5, "MACD bullish crossover"
-    if macd_line < macd_signal:
-        return -1.5, "MACD bearish crossover"
-    return 0.0, "MACD flat"
+    return score_macd(macd_line, macd_signal)
 
+def _score_bollinger(price, bb_upper, bb_middle, bb_lower) -> tuple[float, str]:
+    return score_bollinger(price, bb_upper, bb_middle, bb_lower)
 
-def _score_bollinger(
-    price: float,
-    bb_upper: float,
-    bb_middle: float,
-    bb_lower: float,
-) -> tuple[float, str]:
-    """
-    Mean-reversion pressure from Bollinger Band position. Max ±1.5.
+def _score_volume(volume, avg_volume, partial_score) -> tuple[float, str]:
+    return score_volume(volume, avg_volume, partial_score)
 
-    Outside the bands → strong mean-reversion signal (±1.5).
-    Inside the bands → weak directional lean toward the midline (±0.25).
-    """
-    if price < bb_lower:
-        return +1.5, f"below lower BB ({bb_lower:.2f}) — mean-reversion buy"
-    if price > bb_upper:
-        return -1.5, f"above upper BB ({bb_upper:.2f}) — mean-reversion sell"
-    # Inside bands: small lean toward midline
-    if price < bb_middle:
-        return +0.25, "below BB midline"
-    return -0.25, "above BB midline"
-
-
-def _score_volume(
-    volume: int | None,
-    avg_volume: int | None,
-    partial_score: float,
-) -> tuple[float, str]:
-    """
-    Unusual volume amplifies the existing signal direction. Max ±1.0.
-
-    Direction taken from the sign of partial_score (sum of RSI + trend + MACD + BB).
-    Neutral volume contributes nothing — doesn't override signal direction.
-    """
-    if not volume or not avg_volume or avg_volume == 0:
-        return 0.0, "volume data unavailable"
-
-    ratio     = volume / avg_volume
-    direction = 1.0 if partial_score >= 0 else -1.0
-
-    if ratio >= 1.5:
-        return direction * 1.0, f"volume {ratio:.1f}× avg — high conviction"
-    if ratio >= 1.2:
-        return direction * 0.5, f"volume {ratio:.1f}× avg — moderate conviction"
-    return 0.0, f"volume {ratio:.1f}× avg — normal"
-
-
-def _score_momentum(change_pct: float | None) -> tuple[float, str]:
-    """
-    Day-over-day price change percentage. Max ±2.0.
-
-    Two tiers each side:
-        ≥ +3% → +2.0   strong up day
-        ≥ +1% → +1.0   moderate up day
-        ≤ -3% → -2.0   strong down day
-        ≤ -1% → -1.0   moderate down day
-    """
-    if change_pct is None:
-        return 0.0, "momentum unavailable"
-    if change_pct >= 3.0:
-        return +2.0, f"+{change_pct:.1f}% — strong up day"
-    if change_pct >= 1.0:
-        return +1.0, f"+{change_pct:.1f}% — moderate up day"
-    if change_pct <= -3.0:
-        return -2.0, f"{change_pct:.1f}% — strong down day"
-    if change_pct <= -1.0:
-        return -1.0, f"{change_pct:.1f}% — moderate down day"
-    return 0.0, f"{change_pct:+.1f}% — flat"
-
-
-# ── Summary builder ───────────────────────────────────────────────────────────
+def _score_momentum(change_pct) -> tuple[float, str]:
+    return score_momentum(change_pct)
 
 def _build_summary(direction: str, components: dict, score: float) -> str:
-    """
-    Build a 1-line summary from the top contributing components.
-    Deterministic — no LLM. The full Haiku narrative is added in Step 5.4.
-
-    Example:
-        "📈 Bullish signal (+7.5): RSI 28.4 — oversold, below lower BB, MACD bullish"
-    """
-    emoji = "📈" if direction == "bullish" else "📉" if direction == "bearish" else "➡️"
-
-    # Sort components by absolute contribution, take top 3
-    ranked = sorted(
-        [(abs(v["score"]), v["reason"]) for v in components.values() if abs(v["score"]) >= 0.5],
-        reverse=True,
-    )
-    reasons = ", ".join(r for _, r in ranked[:3]) if ranked else "mixed signals"
-
-    sign = "+" if score > 0 else ""
-    return f"{emoji} {direction.capitalize()} signal ({sign}{score:.1f}): {reasons}"
+    return build_summary(direction, components, score)
 
 
 # ── Public entry point ────────────────────────────────────────────────────────
