@@ -34,11 +34,13 @@ from dotenv import load_dotenv
 load_dotenv(_AGENTS_ROOT / "stock-analysis-agent" / ".env")
 
 from orchestrator.contracts import AgentMessage, AgentResponse
+from orchestrator.risk_agent import evaluate_proposal, Verdict
 from stock_agent.agent import run_analysis
 from stock_agent.trading_agent import run_trading_agent, monitor_positions
 from stock_agent.reflection import reflect
 from stock_agent.research import run_research_orchestrator
 from stock_agent.alpaca_tools import get_account_balance, get_positions
+from stock_agent.tools import get_current_price
 from stock_agent.memory import get_performance_summary
 
 # ── Model constants ────────────────────────────────────────────────────────────
@@ -213,16 +215,23 @@ def _format_portfolio() -> str:
 
 # ── Dispatcher ─────────────────────────────────────────────────────────────────
 
-def _dispatch(intent: str, tickers: list[str], raw_text: str, user_id: str) -> str:
+def _dispatch_full(
+    intent: str, tickers: list[str], raw_text: str, user_id: str
+) -> tuple[str, bool, dict | None]:
     """
     Route a classified intent to the correct agent pipeline.
 
-    user_id is accepted and threaded through for Phase 4 multi-tenancy.
-    Pipeline functions currently ignore it — Phase 4 adds per-user DB scoping.
+    Returns:
+        (text, requires_approval, approval_context)
 
-    Phase 3 will insert risk_agent.evaluate_proposal() here before any
-    trade execution reaches run_trading_agent().
+        requires_approval is True when a trade ticker triggered ESCALATE.
+        approval_context carries the escalation details for the Teams
+        Adaptive Card renderer in the channel adapter.
+
+    user_id is threaded through for Phase 4 multi-tenancy (currently unused).
     """
+    import math
+
     if intent == "help":
         return (
             "## 🤖 Stock Trading Agent\n\n"
@@ -234,26 +243,77 @@ def _dispatch(intent: str, tickers: list[str], raw_text: str, user_id: str) -> s
             "- **Reflect** — Extract lessons from trade history\n"
             "- **Monitor** — Review open positions for exits\n\n"
             "*Powered by Claude + Alpaca paper trading*"
-        )
+        ), False, None
 
     if intent == "analyze" and tickers:
-        return run_analysis(tickers[0])
+        return run_analysis(tickers[0]), False, None
 
     if intent == "research" and tickers:
         request = raw_text or f"Research {tickers[0]} and give me a detailed buy/hold/sell recommendation"
-        return run_research_orchestrator(tickers[0], request)
+        return run_research_orchestrator(tickers[0], request), False, None
 
     if intent == "trade" and tickers:
-        # Phase 3: risk_agent.evaluate_proposal() will gate this call
-        return run_trading_agent(tickers, raw_text or None)
+        # ── Phase 3 risk gate ─────────────────────────────────────────────────
+        # Fetch account once for the whole batch
+        account = get_account_balance()
+        equity  = account.get("equity", 0) if not account.get("error") else 0
+
+        blocked:   list[tuple[str, object]] = []
+        escalated: list[tuple[str, object]] = []
+        approved:  list[tuple[str, int]]    = []
+
+        for t in tickers:
+            price_data    = get_current_price(t)
+            current_price = price_data.get("current_price", 0)
+
+            # 5% position sizing → proposed qty (at least 1 share)
+            proposed_qty = max(
+                math.floor(equity * 0.05 / current_price) if current_price > 0 else 1,
+                1,
+            )
+
+            result = evaluate_proposal(t, proposed_qty, "buy")
+
+            if result.verdict in (Verdict.APPROVED, Verdict.RESIZE):
+                approved.append((t, result.adjusted_qty))
+            elif result.verdict == Verdict.BLOCK:
+                blocked.append((t, result))
+            elif result.verdict == Verdict.ESCALATE:
+                escalated.append((t, result))
+
+        lines: list[str] = []
+
+        for t, r in blocked:
+            lines.append(f"🚫 **{t} BLOCKED** — {r.narrative}")
+
+        escalation_context = None
+        for t, r in escalated:
+            lines.append(f"⚠️ **{t} ESCALATED** — Human approval required\n{r.narrative}")
+            escalation_context = {
+                "ticker":   t,
+                "side":     "buy",
+                "qty":      r.adjusted_qty,
+                "reason":   r.reason,
+                "narrative": r.narrative,
+            }
+
+        if approved:
+            approved_tickers = [t for t, _ in approved]
+            lines.append(run_trading_agent(approved_tickers, raw_text or None))
+
+        if not lines:
+            lines.append("No trades were executed.")
+
+        requires_approval = len(escalated) > 0
+        return "\n\n".join(lines), requires_approval, escalation_context
 
     if intent == "portfolio":
-        return _format_portfolio()
+        return _format_portfolio(), False, None
 
     if intent == "reflect":
         result = reflect(min_trades=1)
         if result.get("status") == "skipped":
-            return f"⚠️ {result['reason']}"
+            return f"⚠️ {result['reason']}", False, None
         lines = [
             "## 🧠 Reflection Complete\n",
             f"**Trades Analyzed:** {result.get('trades_analyzed')}",
@@ -263,10 +323,10 @@ def _dispatch(intent: str, tickers: list[str], raw_text: str, user_id: str) -> s
         for i, lesson in enumerate(result.get("lessons", []), 1):
             lines.append(f"{i}. {lesson}")
         lines.append(f"\n### Summary\n{result.get('summary', '')}")
-        return "\n".join(lines)
+        return "\n".join(lines), False, None
 
     if intent == "monitor":
-        return monitor_positions()
+        return monitor_positions(), False, None
 
     return (
         "I didn't understand that. Try:\n"
@@ -275,7 +335,7 @@ def _dispatch(intent: str, tickers: list[str], raw_text: str, user_id: str) -> s
         "- **Portfolio**\n"
         "- **Reflect**\n"
         "- **Monitor**"
-    )
+    ), False, None
 
 
 # ── Public entry point ─────────────────────────────────────────────────────────
@@ -285,7 +345,8 @@ def route(msg: AgentMessage) -> AgentResponse:
     Main entry point for all channel adapters.
 
     1. Classify intent with Claude Haiku (falls back to regex on failure)
-    2. Dispatch to the correct agent pipeline
+    2. Dispatch to the correct agent pipeline (trade intent passes through
+       risk_agent.evaluate_proposal() before reaching run_trading_agent)
     3. Return a normalised AgentResponse
 
     Args:
@@ -293,7 +354,15 @@ def route(msg: AgentMessage) -> AgentResponse:
 
     Returns:
         AgentResponse with intent, formatted text, and approval metadata.
+        requires_approval is True when any ticker triggered an ESCALATE verdict.
     """
     intent, tickers = _classify(msg.text)
-    text = _dispatch(intent, tickers, msg.text, msg.user_id)
-    return AgentResponse(intent=intent, text=text)
+    text, requires_approval, approval_context = _dispatch_full(
+        intent, tickers, msg.text, msg.user_id
+    )
+    return AgentResponse(
+        intent=intent,
+        text=text,
+        requires_approval=requires_approval,
+        approval_context=approval_context,
+    )
