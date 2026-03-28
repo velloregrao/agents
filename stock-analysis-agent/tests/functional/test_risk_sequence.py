@@ -79,6 +79,10 @@ def _no_positions():
     return {"positions": [], "total_positions": 0}
 
 
+def _no_open_orders():
+    return {"open_orders": [], "total_open": 0}
+
+
 def _nvda_position():
     """NVDA already held — sets up the correlation guard for AMD."""
     return {
@@ -91,6 +95,14 @@ def _nvda_position():
             "current_price": NVDA_PRICE,
         }],
         "total_positions": 1,
+    }
+
+
+def _nvda_open_order():
+    """NVDA as a pending after-hours order (not yet a position)."""
+    return {
+        "open_orders": [{"ticker": "NVDA", "quantity": 5, "side": "buy", "status": "new"}],
+        "total_open": 1,
     }
 
 
@@ -117,6 +129,7 @@ class TestStep1_Approved:
     @patch("orchestrator.risk_agent._generate_narrative", side_effect=_mock_narrative)
     @patch("orchestrator.risk_agent.get_stock_info",      return_value=_stock_info())
     @patch("orchestrator.risk_agent.get_current_price",   return_value=_price(AAPL_PRICE))
+    @patch("orchestrator.risk_agent.get_open_orders",     return_value=_no_open_orders())
     @patch("orchestrator.risk_agent.get_positions",       return_value=_no_positions())
     @patch("orchestrator.risk_agent.get_account_balance", return_value=_healthy_account())
     def test_evaluate_proposal_approved(self, *_):
@@ -130,6 +143,7 @@ class TestStep1_Approved:
     @patch("orchestrator.risk_agent._generate_narrative", side_effect=_mock_narrative)
     @patch("orchestrator.risk_agent.get_stock_info",      return_value=_stock_info())
     @patch("orchestrator.risk_agent.get_current_price",   return_value=_price(AAPL_PRICE))
+    @patch("orchestrator.risk_agent.get_open_orders",     return_value=_no_open_orders())
     @patch("orchestrator.risk_agent.get_positions",       return_value=_no_positions())
     @patch("orchestrator.risk_agent.get_account_balance", return_value=_healthy_account())
     @patch("orchestrator.router.get_current_price",       return_value=_price(AAPL_PRICE))
@@ -163,6 +177,7 @@ class TestStep2_Escalate:
     @patch("orchestrator.risk_agent._generate_narrative", side_effect=_mock_narrative)
     @patch("orchestrator.risk_agent.get_stock_info",      return_value=_stock_info())
     @patch("orchestrator.risk_agent.get_current_price",   return_value=_price(AMD_PRICE))
+    @patch("orchestrator.risk_agent.get_open_orders",     return_value=_no_open_orders())
     @patch("orchestrator.risk_agent.get_positions",       return_value=_nvda_position())
     @patch("orchestrator.risk_agent.get_account_balance", return_value=_healthy_account())
     def test_evaluate_proposal_escalates(self, *_):
@@ -176,6 +191,7 @@ class TestStep2_Escalate:
     @patch("orchestrator.risk_agent._generate_narrative", side_effect=_mock_narrative)
     @patch("orchestrator.risk_agent.get_stock_info",      return_value=_stock_info())
     @patch("orchestrator.risk_agent.get_current_price",   return_value=_price(AMD_PRICE))
+    @patch("orchestrator.risk_agent.get_open_orders",     return_value=_no_open_orders())
     @patch("orchestrator.risk_agent.get_positions",       return_value=_nvda_position())
     @patch("orchestrator.risk_agent.get_account_balance", return_value=_healthy_account())
     @patch("orchestrator.router.get_current_price",       return_value=_price(AMD_PRICE))
@@ -198,6 +214,23 @@ class TestStep2_Escalate:
         assert "ESCALATED" in resp.text
         assert "Human approval required" in resp.text
 
+    @patch("orchestrator.risk_agent._generate_narrative", side_effect=_mock_narrative)
+    @patch("orchestrator.risk_agent.get_stock_info",      return_value=_stock_info())
+    @patch("orchestrator.risk_agent.get_current_price",   return_value=_price(AMD_PRICE))
+    @patch("orchestrator.risk_agent.get_open_orders",     return_value=_nvda_open_order())
+    @patch("orchestrator.risk_agent.get_positions",       return_value=_no_positions())  # empty!
+    @patch("orchestrator.risk_agent.get_account_balance", return_value=_healthy_account())
+    def test_evaluate_proposal_escalates_via_open_order(self, *_):
+        """
+        NVDA is a pending after-hours order (not yet a position).
+        The open-orders check should still trigger ESCALATE for AMD.
+        """
+        result = evaluate_proposal("AMD", 10, "buy")
+
+        assert result.verdict == Verdict.ESCALATE
+        assert result.reason  == "correlation_guard"
+        assert result.rule    == 4
+
 
 # ── Step 3: BLOCK — daily loss circuit breaker ─────────────────────────────────
 
@@ -212,6 +245,7 @@ class TestStep3_Block:
     @patch("orchestrator.risk_agent._generate_narrative", side_effect=_mock_narrative)
     @patch("orchestrator.risk_agent.get_stock_info",      return_value=_stock_info())
     @patch("orchestrator.risk_agent.get_current_price",   return_value=_price(MSFT_PRICE))
+    @patch("orchestrator.risk_agent.get_open_orders",     return_value=_no_open_orders())
     @patch("orchestrator.risk_agent.get_positions",       return_value=_no_positions())
     @patch("orchestrator.risk_agent.get_account_balance", return_value=_down_account())
     def test_evaluate_proposal_blocked(self, *_):
@@ -226,6 +260,7 @@ class TestStep3_Block:
     @patch("orchestrator.risk_agent._generate_narrative", side_effect=_mock_narrative)
     @patch("orchestrator.risk_agent.get_stock_info",      return_value=_stock_info())
     @patch("orchestrator.risk_agent.get_current_price",   return_value=_price(MSFT_PRICE))
+    @patch("orchestrator.risk_agent.get_open_orders",     return_value=_no_open_orders())
     @patch("orchestrator.risk_agent.get_positions",       return_value=_no_positions())
     @patch("orchestrator.risk_agent.get_account_balance", return_value=_down_account())
     @patch("orchestrator.router.get_current_price",       return_value=_price(MSFT_PRICE))
@@ -265,6 +300,7 @@ class TestFullSession:
         with (
             patch("orchestrator.risk_agent.get_account_balance", return_value=_healthy_account()),
             patch("orchestrator.risk_agent.get_positions",       return_value=_no_positions()),
+            patch("orchestrator.risk_agent.get_open_orders",     return_value=_no_open_orders()),
             patch("orchestrator.risk_agent.get_current_price",   return_value=_price(AAPL_PRICE)),
             patch("orchestrator.risk_agent.get_stock_info",      return_value=_stock_info()),
             patch("orchestrator.risk_agent._generate_narrative", side_effect=_mock_narrative),
@@ -279,6 +315,7 @@ class TestFullSession:
         with (
             patch("orchestrator.risk_agent.get_account_balance", return_value=_healthy_account()),
             patch("orchestrator.risk_agent.get_positions",       return_value=_nvda_position()),
+            patch("orchestrator.risk_agent.get_open_orders",     return_value=_no_open_orders()),
             patch("orchestrator.risk_agent.get_current_price",   return_value=_price(AMD_PRICE)),
             patch("orchestrator.risk_agent.get_stock_info",      return_value=_stock_info()),
             patch("orchestrator.risk_agent._generate_narrative", side_effect=_mock_narrative),
@@ -290,10 +327,26 @@ class TestFullSession:
         assert step2.reason == "correlation_guard"
         assert step2.narrative != ""
 
+        # ── Step 2b: ESCALATE (NVDA pending after-hours, not yet a position) ──
+        with (
+            patch("orchestrator.risk_agent.get_account_balance", return_value=_healthy_account()),
+            patch("orchestrator.risk_agent.get_positions",       return_value=_no_positions()),
+            patch("orchestrator.risk_agent.get_open_orders",     return_value=_nvda_open_order()),
+            patch("orchestrator.risk_agent.get_current_price",   return_value=_price(AMD_PRICE)),
+            patch("orchestrator.risk_agent.get_stock_info",      return_value=_stock_info()),
+            patch("orchestrator.risk_agent._generate_narrative", side_effect=_mock_narrative),
+        ):
+            step2b = evaluate_proposal("AMD", 10, "buy")
+
+        assert step2b.verdict == Verdict.ESCALATE, \
+            f"Step 2b expected ESCALATE (after-hours order), got {step2b.verdict}"
+        assert step2b.reason == "correlation_guard"
+
         # ── Step 3: BLOCK (portfolio down 2.5%) ───────────────────────────────
         with (
             patch("orchestrator.risk_agent.get_account_balance", return_value=_down_account()),
             patch("orchestrator.risk_agent.get_positions",       return_value=_no_positions()),
+            patch("orchestrator.risk_agent.get_open_orders",     return_value=_no_open_orders()),
             patch("orchestrator.risk_agent.get_current_price",   return_value=_price(MSFT_PRICE)),
             patch("orchestrator.risk_agent.get_stock_info",      return_value=_stock_info()),
             patch("orchestrator.risk_agent._generate_narrative", side_effect=_mock_narrative),

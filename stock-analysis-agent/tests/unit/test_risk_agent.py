@@ -41,6 +41,17 @@ def _price(p=150.0):
 def _positions(holdings=None):
     return {"positions": holdings or [], "total_positions": len(holdings or [])}
 
+def _no_open_orders():
+    return {"open_orders": [], "total_open": 0}
+
+def _open_orders(tickers):
+    """Simulate pending after-hours buy orders for the given tickers."""
+    return {
+        "open_orders": [{"ticker": t, "quantity": 10, "side": "buy", "status": "new"}
+                        for t in tickers],
+        "total_open": len(tickers),
+    }
+
 def _stock_info(sector="Technology"):
     return {"sector": sector, "name": "Test Corp"}
 
@@ -53,9 +64,10 @@ def _no_narrative(context):
 @patch("orchestrator.risk_agent._generate_narrative", side_effect=_no_narrative)
 @patch("orchestrator.risk_agent.get_stock_info",    return_value=_stock_info())
 @patch("orchestrator.risk_agent.get_current_price", return_value=_price(150.0))
+@patch("orchestrator.risk_agent.get_open_orders",   return_value=_no_open_orders())
 @patch("orchestrator.risk_agent.get_positions",     return_value=_positions())
 @patch("orchestrator.risk_agent.get_account_balance", return_value=_account())
-def test_approved(mock_bal, mock_pos, mock_price, mock_info, mock_narr):
+def test_approved(mock_bal, mock_pos, mock_open, mock_price, mock_info, mock_narr):
     """10 shares @ $150 = $1,500 = 1.5% of $100k equity — well under 5% limit."""
     result = evaluate_proposal("AAPL", 10, "buy")
     assert result.verdict      == Verdict.APPROVED
@@ -68,9 +80,10 @@ def test_approved(mock_bal, mock_pos, mock_price, mock_info, mock_narr):
 @patch("orchestrator.risk_agent._generate_narrative", side_effect=_no_narrative)
 @patch("orchestrator.risk_agent.get_stock_info",    return_value=_stock_info())
 @patch("orchestrator.risk_agent.get_current_price", return_value=_price(150.0))
+@patch("orchestrator.risk_agent.get_open_orders",   return_value=_no_open_orders())
 @patch("orchestrator.risk_agent.get_positions",     return_value=_positions())
 @patch("orchestrator.risk_agent.get_account_balance", return_value=_account())
-def test_resize(mock_bal, mock_pos, mock_price, mock_info, mock_narr):
+def test_resize(mock_bal, mock_pos, mock_open, mock_price, mock_info, mock_narr):
     """500 shares @ $150 = $75,000 = 75% of equity — must be resized to 5%."""
     result = evaluate_proposal("AAPL", 500, "buy")
     assert result.verdict == Verdict.RESIZE
@@ -86,10 +99,11 @@ def test_resize(mock_bal, mock_pos, mock_price, mock_info, mock_narr):
 @patch("orchestrator.risk_agent._generate_narrative", side_effect=_no_narrative)
 @patch("orchestrator.risk_agent.get_stock_info",    return_value=_stock_info())
 @patch("orchestrator.risk_agent.get_current_price", return_value=_price(150.0))
+@patch("orchestrator.risk_agent.get_open_orders",   return_value=_no_open_orders())
 @patch("orchestrator.risk_agent.get_positions",     return_value=_positions())
 @patch("orchestrator.risk_agent.get_account_balance",
        return_value=_account(equity=100_000, pnl_today_pct=-2.5))
-def test_block_daily_loss(mock_bal, mock_pos, mock_price, mock_info, mock_narr):
+def test_block_daily_loss(mock_bal, mock_pos, mock_open, mock_price, mock_info, mock_narr):
     """Portfolio down 2.5% today — exceeds -2% halt threshold → BLOCK."""
     result = evaluate_proposal("AAPL", 10, "buy")
     assert result.verdict      == Verdict.BLOCK
@@ -103,12 +117,13 @@ def test_block_daily_loss(mock_bal, mock_pos, mock_price, mock_info, mock_narr):
 @patch("orchestrator.risk_agent._generate_narrative", side_effect=_no_narrative)
 @patch("orchestrator.risk_agent.get_stock_info",    return_value=_stock_info("Technology"))
 @patch("orchestrator.risk_agent.get_current_price", return_value=_price(150.0))
+@patch("orchestrator.risk_agent.get_open_orders",   return_value=_no_open_orders())
 @patch("orchestrator.risk_agent.get_positions", return_value=_positions([
     # Already hold $22,000 in Technology sector (22% of $100k equity)
     {"ticker": "MSFT", "market_value": 22_000, "sector": "Technology"},
 ]))
 @patch("orchestrator.risk_agent.get_account_balance", return_value=_account())
-def test_escalate_sector_concentration(mock_bal, mock_pos, mock_price, mock_info, mock_narr):
+def test_escalate_sector_concentration(mock_bal, mock_pos, mock_open, mock_price, mock_info, mock_narr):
     """
     Existing Technology exposure $22k (22%).
     Adding 30 shares AAPL @ $150 = $4,500 → total $26,500 = 26.5% > 25% limit.
@@ -119,17 +134,37 @@ def test_escalate_sector_concentration(mock_bal, mock_pos, mock_price, mock_info
     assert result.rule    == 3
 
 
-# ── Test 5: ESCALATE — correlation guard ──────────────────────────────────────
+# ── Test 5a: ESCALATE — correlation guard (via position) ──────────────────────
 
 @patch("orchestrator.risk_agent._generate_narrative", side_effect=_no_narrative)
 @patch("orchestrator.risk_agent.get_stock_info",    return_value=_stock_info("Technology"))
 @patch("orchestrator.risk_agent.get_current_price", return_value=_price(900.0))
+@patch("orchestrator.risk_agent.get_open_orders",   return_value=_no_open_orders())
 @patch("orchestrator.risk_agent.get_positions", return_value=_positions([
     {"ticker": "NVDA", "market_value": 3_000, "sector": "Technology"},
 ]))
 @patch("orchestrator.risk_agent.get_account_balance", return_value=_account())
-def test_escalate_correlation_guard(mock_bal, mock_pos, mock_price, mock_info, mock_narr):
-    """Proposing AMD while holding NVDA — known correlated pair → ESCALATE."""
+def test_escalate_correlation_guard(mock_bal, mock_pos, mock_open, mock_price, mock_info, mock_narr):
+    """Proposing AMD while holding NVDA position — known correlated pair → ESCALATE."""
+    result = evaluate_proposal("AMD", 5, "buy")
+    assert result.verdict == Verdict.ESCALATE
+    assert result.reason  == "correlation_guard"
+    assert result.rule    == 4
+
+
+# ── Test 5b: ESCALATE — correlation guard via pending after-hours order ────────
+
+@patch("orchestrator.risk_agent._generate_narrative", side_effect=_no_narrative)
+@patch("orchestrator.risk_agent.get_stock_info",    return_value=_stock_info("Technology"))
+@patch("orchestrator.risk_agent.get_current_price", return_value=_price(900.0))
+@patch("orchestrator.risk_agent.get_open_orders",   return_value=_open_orders(["NVDA"]))
+@patch("orchestrator.risk_agent.get_positions",     return_value=_positions())  # empty positions
+@patch("orchestrator.risk_agent.get_account_balance", return_value=_account())
+def test_escalate_correlation_guard_after_hours(mock_bal, mock_pos, mock_open, mock_price, mock_info, mock_narr):
+    """
+    NVDA was ordered after hours (pending, not yet a position).
+    Proposing AMD should still ESCALATE via the open-orders check.
+    """
     result = evaluate_proposal("AMD", 5, "buy")
     assert result.verdict == Verdict.ESCALATE
     assert result.reason  == "correlation_guard"
@@ -140,9 +175,10 @@ def test_escalate_correlation_guard(mock_bal, mock_pos, mock_price, mock_info, m
 
 @patch("orchestrator.risk_agent.get_account_balance")
 @patch("orchestrator.risk_agent.get_positions")
+@patch("orchestrator.risk_agent.get_open_orders")
 @patch("orchestrator.risk_agent.get_current_price")
 @patch("orchestrator.risk_agent.get_stock_info")
-def test_sell_always_approved(mock_info, mock_price, mock_pos, mock_bal):
+def test_sell_always_approved(mock_info, mock_price, mock_open, mock_pos, mock_bal):
     """SELL orders bypass all rules — closing a position reduces risk."""
     result = evaluate_proposal("AAPL", 10, "sell")
     assert result.verdict      == Verdict.APPROVED
@@ -151,5 +187,6 @@ def test_sell_always_approved(mock_info, mock_price, mock_pos, mock_bal):
     # No market data calls should have been made
     mock_bal.assert_not_called()
     mock_pos.assert_not_called()
+    mock_open.assert_not_called()
     mock_price.assert_not_called()
     mock_info.assert_not_called()

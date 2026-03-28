@@ -152,6 +152,37 @@ def place_limit_order(ticker: str, quantity: int, side: str, price: float) -> di
         return {"error": str(e)}
 
 
+def get_open_orders() -> dict:
+    """
+    Get all open (pending / not yet filled) orders from the paper account.
+
+    Used by the risk agent to detect after-hours positions that haven't
+    settled into the positions list yet.  Returns tickers in the same
+    format as get_positions() so callers can merge the two lists.
+    """
+    try:
+        from alpaca.trading.requests import GetOrdersRequest
+        from alpaca.trading.enums import QueryOrderStatus
+        client = _get_client()
+
+        request = GetOrdersRequest(status=QueryOrderStatus.OPEN)
+        orders  = client.get_orders(request)
+
+        open_orders = []
+        for order in orders:
+            if order.side == OrderSide.BUY:
+                open_orders.append({
+                    "ticker":   order.symbol,
+                    "quantity": float(order.qty),
+                    "side":     order.side.value,
+                    "status":   order.status.value,
+                })
+
+        return {"open_orders": open_orders, "total_open": len(open_orders)}
+    except Exception as e:
+        return {"error": str(e), "open_orders": [], "total_open": 0}
+
+
 def get_order_history(max_results: int = 10) -> dict:
     """
     Get recent order history from the paper account.

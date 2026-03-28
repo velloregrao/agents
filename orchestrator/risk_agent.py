@@ -39,7 +39,7 @@ load_dotenv(_AGENTS_ROOT / "stock-analysis-agent" / ".env")
 import sys
 sys.path.insert(0, str(_AGENTS_ROOT / "stock-analysis-agent" / "src"))
 
-from stock_agent.alpaca_tools import get_account_balance, get_positions
+from stock_agent.alpaca_tools import get_account_balance, get_positions, get_open_orders
 from stock_agent.tools import get_stock_info, get_current_price
 
 # ── Model constants ────────────────────────────────────────────────────────────
@@ -274,16 +274,21 @@ def evaluate_proposal(ticker: str, proposed_qty: int, side: str) -> RiskResult:
         )
 
     # ── Fetch market data ──────────────────────────────────────────────────────
-    account     = get_account_balance()
-    pos_data    = get_positions()
-    price_data  = get_current_price(ticker)
-    stock_info  = get_stock_info(ticker)
+    account       = get_account_balance()
+    pos_data      = get_positions()
+    open_ord_data = get_open_orders()
+    price_data    = get_current_price(ticker)
+    stock_info    = get_stock_info(ticker)
 
     equity        = account.get("equity", 0) if not account.get("error") else 0
     positions     = pos_data.get("positions", [])
     current_price = price_data.get("current_price", 0)
     ticker_sector = stock_info.get("sector", "N/A")
-    held_tickers  = [p["ticker"] for p in positions]
+
+    # Combine filled positions + pending open orders so the correlation guard
+    # fires even when an after-hours buy hasn't settled into a position yet.
+    open_order_tickers = [o["ticker"] for o in open_ord_data.get("open_orders", [])]
+    held_tickers       = list({p["ticker"] for p in positions} | set(open_order_tickers))
 
     # Attach sector to each position for rule 3 (best-effort — may be missing)
     # In Phase 4 we'll persist sector in the DB; for now we enrich on the fly
