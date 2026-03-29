@@ -51,7 +51,18 @@ az containerapp update \
   --set-env-vars "AGENT_API_KEY=secretref:agent-api-key" \
   --output none
 
-echo "✅  $PYTHON_API updated"
+echo "▶  Restarting $PYTHON_API to pick up new secret..."
+REVISION=$(az containerapp show \
+  --name "$PYTHON_API" \
+  --resource-group "$RG" \
+  --query properties.latestRevisionName \
+  --output tsv)
+az containerapp revision restart \
+  --name "$PYTHON_API" \
+  --resource-group "$RG" \
+  --revision "$REVISION" \
+  --output none
+echo "✅  $PYTHON_API updated and restarted"
 echo ""
 
 # ── stock-bot: set secret + wire env var ──────────────────────────────────────
@@ -70,7 +81,18 @@ az containerapp update \
   --set-env-vars "AGENT_API_KEY=secretref:agent-api-key" \
   --output none
 
-echo "✅  $BOT updated"
+echo "▶  Restarting $BOT to pick up new secret..."
+REVISION=$(az containerapp show \
+  --name "$BOT" \
+  --resource-group "$RG" \
+  --query properties.latestRevisionName \
+  --output tsv)
+az containerapp revision restart \
+  --name "$BOT" \
+  --resource-group "$RG" \
+  --revision "$REVISION" \
+  --output none
+echo "✅  $BOT updated and restarted"
 echo ""
 
 # ── python-api: open external ingress ─────────────────────────────────────────
