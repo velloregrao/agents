@@ -325,7 +325,7 @@ def _custom_gpt_openapi(server_url: str) -> dict:
     focused on the two public interaction endpoints it actually needs.
     """
     return {
-        "openapi": "3.0.3",
+        "openapi": "3.1.0",
         "info": {
             "title": "Stock Trading Agent API",
             "version": "1.0.0",
@@ -345,6 +345,16 @@ def _custom_gpt_openapi(server_url: str) -> dict:
                 }
             },
             "schemas": {
+                "HealthResponse": {
+                    "type": "object",
+                    "required": ["status", "service", "version"],
+                    "properties": {
+                        "status": {"type": "string"},
+                        "service": {"type": "string"},
+                        "version": {"type": "string"},
+                    },
+                    "additionalProperties": True,
+                },
                 "AgentRequest": {
                     "type": "object",
                     "required": ["text"],
@@ -422,7 +432,9 @@ def _custom_gpt_openapi(server_url: str) -> dict:
                             "description": "Service health status",
                             "content": {
                                 "application/json": {
-                                    "schema": {"type": "object"}
+                                    "schema": {
+                                        "$ref": "#/components/schemas/HealthResponse"
+                                    }
                                 }
                             },
                         }
@@ -494,7 +506,10 @@ def _custom_gpt_openapi(server_url: str) -> dict:
 @app.get("/openapi-custom-gpt.json")
 def openapi_custom_gpt(request: Request):
     configured_base_url = os.getenv("PUBLIC_API_BASE_URL", "").strip()
-    server_url = configured_base_url or str(request.base_url).rstrip("/")
+    request_base_url = str(request.base_url).rstrip("/")
+    server_url = configured_base_url or request_base_url
+    if server_url.startswith("http://") and request.url.scheme == "https":
+        server_url = "https://" + server_url[len("http://"):]
     return JSONResponse(_custom_gpt_openapi(server_url))
 
 @app.post("/agent/approve", response_model=AgentResponseModel)

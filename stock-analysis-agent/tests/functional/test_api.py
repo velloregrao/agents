@@ -181,10 +181,15 @@ def test_openapi_custom_gpt_schema_is_minimal(client):
     assert response.status_code == 200
     schema = response.json()
 
-    assert schema["openapi"] == "3.0.3"
+    assert schema["openapi"] == "3.1.0"
     assert set(schema["paths"].keys()) == {"/health", "/agent", "/agent/approve"}
     assert schema["components"]["schemas"]["AgentRequest"]["required"] == ["text"]
     assert schema["servers"][0]["url"] == "http://testserver"
+    assert schema["components"]["schemas"]["HealthResponse"]["required"] == [
+        "status",
+        "service",
+        "version",
+    ]
 
 
 def test_openapi_custom_gpt_schema_is_auth_exempt(client):
