@@ -365,12 +365,34 @@ def _dispatch_full(
         try:
             plan = build_rebalance_plan(user_id)
             text = format_plan_markdown(plan)
-            return (
-                f"{text}\n\n"
-                f"*Plan ID: `{plan.plan_id}`*\n\n"
-                f"⏳ **This plan requires your approval before any trades are executed.** "
-                f"You'll receive an approval card shortly — or type **Allocation** to view the target config."
-            ), False, None
+            approval_context = {
+                "alert_type":       "rebalance",
+                "plan_id":          plan.plan_id,
+                "equity":           plan.equity,
+                "cash":             plan.cash,
+                "trades":           [
+                    {
+                        "ticker":       t.ticker,
+                        "side":         t.side,
+                        "adjusted_qty": t.adjusted_qty,
+                        "trade_value":  t.trade_value,
+                        "current_pct":  t.current_pct,
+                        "target_pct":   t.target_pct,
+                        "drift_pct":    t.drift_pct,
+                        "risk_verdict": t.risk_verdict,
+                    }
+                    for t in plan.trades
+                ],
+                "blocked":          [
+                    {"ticker": b.ticker, "side": b.side, "risk_note": b.risk_note}
+                    for b in plan.blocked
+                ],
+                "total_sell_value": plan.total_sell_value,
+                "total_buy_value":  plan.total_buy_value,
+                "net_cash_change":  plan.net_cash_change,
+                "rationale":        plan.rationale,
+            }
+            return text, True, approval_context
         except ValueError as exc:
             return f"ℹ️ {exc}", False, None
         except Exception as exc:

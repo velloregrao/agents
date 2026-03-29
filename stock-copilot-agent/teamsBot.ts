@@ -779,9 +779,11 @@ export class TeamsBot extends TeamsActivityHandler {
         const response = await callAgent(msg);
 
         if (response.requires_approval && response.approval_context) {
-          // Send the risk narrative as text first, then the approval card
           await context.sendActivity(response.text);
-          const card = buildApprovalCard(response.approval_context);
+          const ctx = response.approval_context;
+          const card = ctx.alert_type === "rebalance"
+            ? buildRebalanceCard({ id: 0, user_id: userId, ticker: "", alert_type: "rebalance", signal: ctx as unknown as RebalancePayload, risk: { verdict: "", adjusted_qty: 0, reason: "", narrative: "" }, proposed_qty: 0, created_at: "", conversation_ref: null })
+            : buildApprovalCard(ctx);
           await context.sendActivity(MessageFactory.attachment(card));
         } else {
           await context.sendActivity(response.text);
