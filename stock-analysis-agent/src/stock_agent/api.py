@@ -35,7 +35,11 @@ import anthropic
 # Health endpoints are always exempt so liveness probes never need a key.
 
 _API_KEY = os.getenv("AGENT_API_KEY", "").strip() or None
-_AUTH_EXEMPT = {"/health", "/health/deep"}
+_AUTH_EXEMPT = {
+    "/health",
+    "/health/deep",
+    "/openapi-custom-gpt.json",
+}
 
 from stock_agent.tools import (
     get_stock_info,
@@ -291,8 +295,8 @@ def research(req: ResearchRequest):
 # Model definitions shared by /agent and /agent/approve
 
 class AgentRequest(BaseModel):
-    user_id:   str
-    platform:  str = "teams"
+    user_id:   str = "openai:gpt"
+    platform:  str = "openai"
     text:      str
     thread_id: str = ""
     timestamp: str = ""
@@ -309,7 +313,187 @@ class AgentResponseModel(BaseModel):
 class ApproveRequest(BaseModel):
     approval_id: str
     decision:    str   # "approve" or "reject"
-    user_id:     str
+    user_id:     str = "openai:gpt"
+
+
+def _custom_gpt_openapi() -> dict:
+    """
+    Return a minimal OpenAPI schema tailored for Custom GPT Actions.
+
+    FastAPI's generated schema exposes the entire internal app surface. This
+    smaller schema is easier to paste into the GPT builder and keeps the model
+    focused on the two public interaction endpoints it actually needs.
+    """
+    return {
+        "openapi": "3.0.3",
+        "info": {
+            "title": "Stock Trading Agent API",
+            "version": "1.0.0",
+            "description": (
+                "Minimal schema for an OpenAI Custom GPT action. "
+                "Use POST /agent for natural-language requests and "
+                "POST /agent/approve to resolve escalated trades."
+            ),
+        },
+        "servers": [{"url": "/"}],
+        "components": {
+            "securitySchemes": {
+                "ApiKeyAuth": {
+                    "type": "apiKey",
+                    "in": "header",
+                    "name": "X-API-Key",
+                }
+            },
+            "schemas": {
+                "AgentRequest": {
+                    "type": "object",
+                    "required": ["text"],
+                    "properties": {
+                        "user_id": {
+                            "type": "string",
+                            "default": "openai:gpt",
+                            "description": "Optional caller identifier for per-user state.",
+                        },
+                        "platform": {
+                            "type": "string",
+                            "default": "openai",
+                            "description": "Calling channel name.",
+                        },
+                        "text": {
+                            "type": "string",
+                            "description": "The user's natural-language request.",
+                        },
+                        "thread_id": {
+                            "type": "string",
+                            "default": "",
+                            "description": "Optional conversation or thread identifier.",
+                        },
+                        "timestamp": {
+                            "type": "string",
+                            "default": "",
+                            "description": "Optional ISO-8601 timestamp.",
+                        },
+                    },
+                },
+                "AgentResponseModel": {
+                    "type": "object",
+                    "required": ["intent", "text"],
+                    "properties": {
+                        "intent": {"type": "string"},
+                        "text": {"type": "string"},
+                        "requires_approval": {
+                            "type": "boolean",
+                            "default": False,
+                        },
+                        "approval_context": {
+                            "type": "object",
+                            "nullable": True,
+                            "additionalProperties": True,
+                        },
+                    },
+                },
+                "ApproveRequest": {
+                    "type": "object",
+                    "required": ["approval_id", "decision"],
+                    "properties": {
+                        "approval_id": {
+                            "type": "string",
+                            "description": "Opaque approval ID returned in approval_context.",
+                        },
+                        "decision": {
+                            "type": "string",
+                            "enum": ["approve", "reject"],
+                        },
+                        "user_id": {
+                            "type": "string",
+                            "default": "openai:gpt",
+                        },
+                    },
+                },
+            },
+        },
+        "paths": {
+            "/health": {
+                "get": {
+                    "summary": "Health check",
+                    "operationId": "getHealth",
+                    "responses": {
+                        "200": {
+                            "description": "Service health status",
+                            "content": {
+                                "application/json": {
+                                    "schema": {"type": "object"}
+                                }
+                            },
+                        }
+                    },
+                }
+            },
+            "/agent": {
+                "post": {
+                    "summary": "Send a message to the trading agent",
+                    "operationId": "sendAgentMessage",
+                    "security": [{"ApiKeyAuth": []}],
+                    "requestBody": {
+                        "required": True,
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/AgentRequest"
+                                }
+                            }
+                        },
+                    },
+                    "responses": {
+                        "200": {
+                            "description": "Agent response",
+                            "content": {
+                                "application/json": {
+                                    "schema": {
+                                        "$ref": "#/components/schemas/AgentResponseModel"
+                                    }
+                                }
+                            },
+                        }
+                    },
+                }
+            },
+            "/agent/approve": {
+                "post": {
+                    "summary": "Approve or reject an escalated trade",
+                    "operationId": "resolveTradeApproval",
+                    "security": [{"ApiKeyAuth": []}],
+                    "requestBody": {
+                        "required": True,
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "$ref": "#/components/schemas/ApproveRequest"
+                                }
+                            }
+                        },
+                    },
+                    "responses": {
+                        "200": {
+                            "description": "Approval resolution result",
+                            "content": {
+                                "application/json": {
+                                    "schema": {
+                                        "$ref": "#/components/schemas/AgentResponseModel"
+                                    }
+                                }
+                            },
+                        }
+                    },
+                }
+            },
+        },
+    }
+
+
+@app.get("/openapi-custom-gpt.json")
+def openapi_custom_gpt():
+    return JSONResponse(_custom_gpt_openapi())
 
 @app.post("/agent/approve", response_model=AgentResponseModel)
 def approve_endpoint(req: ApproveRequest):
