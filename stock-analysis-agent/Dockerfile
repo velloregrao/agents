@@ -13,6 +13,7 @@ COPY stock-analysis-agent/src/ src/
 # api.py computes _AGENTS_ROOT and inserts /app into sys.path, so placing
 # orchestrator/ at /app/orchestrator/ makes it importable.
 COPY orchestrator/ orchestrator/
+COPY config/ config/
 
 # Install all dependencies (includes fastapi + uvicorn + alpaca-py)
 RUN uv pip install --system -e .
