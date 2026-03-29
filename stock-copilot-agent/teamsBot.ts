@@ -140,10 +140,16 @@ interface PendingAlert {
 
 // ── HTTP helpers ──────────────────────────────────────────────────────────────
 
+function apiHeaders(extra: Record<string, string> = {}): Record<string, string> {
+  const headers: Record<string, string> = { "Content-Type": "application/json", ...extra };
+  if (config.agentApiKey) headers["X-API-Key"] = config.agentApiKey;
+  return headers;
+}
+
 async function callAgent(msg: AgentMessage): Promise<AgentResponse> {
   const res = await fetch(`${API}/agent`, {
     method:  "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: apiHeaders(),
     body:    JSON.stringify(msg),
   });
   if (!res.ok) {
@@ -160,7 +166,7 @@ async function callApprove(
 ): Promise<AgentResponse> {
   const res = await fetch(`${API}/agent/approve`, {
     method:  "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: apiHeaders(),
     body:    JSON.stringify({ approval_id: approvalId, decision, user_id: userId }),
   });
   if (!res.ok) {
@@ -176,7 +182,7 @@ async function callRebalanceExecute(
 ): Promise<{ summary: string; executed: string[]; failed: string[] }> {
   const res = await fetch(`${API}/portfolio/rebalance/${planId}/execute`, {
     method:  "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: apiHeaders(),
     body:    JSON.stringify({ user_id: userId }),
   });
   if (!res.ok) {
@@ -187,7 +193,7 @@ async function callRebalanceExecute(
 }
 
 async function callRebalanceReject(planId: string): Promise<void> {
-  await fetch(`${API}/portfolio/rebalance/${planId}/reject`, { method: "POST" });
+  await fetch(`${API}/portfolio/rebalance/${planId}/reject`, { method: "POST", headers: apiHeaders() });
 }
 
 async function storeConversationRef(
@@ -196,20 +202,20 @@ async function storeConversationRef(
 ): Promise<void> {
   await fetch(`${API}/alerts/store-ref`, {
     method:  "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: apiHeaders(),
     body:    JSON.stringify({ user_id: userId, conversation_ref: ref }),
   });
 }
 
 async function fetchPendingAlerts(): Promise<PendingAlert[]> {
-  const res = await fetch(`${API}/alerts/pending`);
+  const res = await fetch(`${API}/alerts/pending`, { headers: apiHeaders() });
   if (!res.ok) return [];
   const data = (await res.json()) as { alerts: PendingAlert[] };
   return data.alerts ?? [];
 }
 
 async function markAlertDelivered(alertId: number): Promise<void> {
-  await fetch(`${API}/alerts/delivered/${alertId}`, { method: "POST" });
+  await fetch(`${API}/alerts/delivered/${alertId}`, { method: "POST", headers: apiHeaders() });
 }
 
 // ── Adaptive Card builders ────────────────────────────────────────────────────

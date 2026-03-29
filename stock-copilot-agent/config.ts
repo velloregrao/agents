@@ -4,6 +4,7 @@ const config = {
   botTenantId: process.env.BOT_TENANT_ID,
   anthropicApiKey: process.env.ANTHROPIC_API_KEY,
   pythonApiUrl: process.env.PYTHON_API_URL ?? "http://127.0.0.1:8000",
+  agentApiKey: process.env.AGENT_API_KEY ?? "",
 };
 
 export default config;
