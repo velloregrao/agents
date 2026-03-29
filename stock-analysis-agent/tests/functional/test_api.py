@@ -152,3 +152,41 @@ def test_monitor_returns_result(mock_monitor, client):
     response = client.post("/monitor", json={})
     assert response.status_code == 200
     assert response.json()["result"] == "No action needed."
+
+
+# ── Custom GPT compatibility ──────────────────────────────────────────────────
+
+@patch("stock_agent.api._route")
+def test_agent_accepts_minimal_custom_gpt_payload(mock_route, client):
+    from orchestrator.contracts import AgentResponse
+
+    mock_route.return_value = AgentResponse(intent="help", text="Hello from agent")
+
+    response = client.post("/agent", json={"text": "What can you do?"})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["intent"] == "help"
+    assert body["text"] == "Hello from agent"
+
+    routed_message = mock_route.call_args.args[0]
+    assert routed_message.user_id == "openai:gpt"
+    assert routed_message.platform == "openai"
+    assert routed_message.text == "What can you do?"
+
+
+def test_openapi_custom_gpt_schema_is_minimal(client):
+    response = client.get("/openapi-custom-gpt.json")
+
+    assert response.status_code == 200
+    schema = response.json()
+
+    assert schema["openapi"] == "3.0.3"
+    assert set(schema["paths"].keys()) == {"/health", "/agent", "/agent/approve"}
+    assert schema["components"]["schemas"]["AgentRequest"]["required"] == ["text"]
+    assert schema["servers"][0]["url"] == "http://testserver"
+
+
+def test_openapi_custom_gpt_schema_is_auth_exempt(client):
+    response = client.get("/openapi-custom-gpt.json")
+    assert response.status_code == 200

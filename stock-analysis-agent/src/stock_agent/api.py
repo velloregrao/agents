@@ -316,7 +316,7 @@ class ApproveRequest(BaseModel):
     user_id:     str = "openai:gpt"
 
 
-def _custom_gpt_openapi() -> dict:
+def _custom_gpt_openapi(server_url: str) -> dict:
     """
     Return a minimal OpenAPI schema tailored for Custom GPT Actions.
 
@@ -335,7 +335,7 @@ def _custom_gpt_openapi() -> dict:
                 "POST /agent/approve to resolve escalated trades."
             ),
         },
-        "servers": [{"url": "/"}],
+        "servers": [{"url": server_url}],
         "components": {
             "securitySchemes": {
                 "ApiKeyAuth": {
@@ -492,8 +492,10 @@ def _custom_gpt_openapi() -> dict:
 
 
 @app.get("/openapi-custom-gpt.json")
-def openapi_custom_gpt():
-    return JSONResponse(_custom_gpt_openapi())
+def openapi_custom_gpt(request: Request):
+    configured_base_url = os.getenv("PUBLIC_API_BASE_URL", "").strip()
+    server_url = configured_base_url or str(request.base_url).rstrip("/")
+    return JSONResponse(_custom_gpt_openapi(server_url))
 
 @app.post("/agent/approve", response_model=AgentResponseModel)
 def approve_endpoint(req: ApproveRequest):
