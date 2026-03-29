@@ -1,4 +1,4 @@
-name: Deploy Teams Bot
+name: Deploy Teams Bot  # updated
 
 on:
   push:
