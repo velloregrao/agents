@@ -61,7 +61,7 @@ _client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 _VALID_INTENTS = frozenset({
     "analyze", "research", "trade", "portfolio",
     "reflect", "monitor", "help", "unknown",
-    "watch", "unwatch", "watchlist", "earnings", "mtf", "optimize",
+    "watch", "unwatch", "watchlist", "earnings", "mtf", "optimize", "digest",
 })
 
 _CLASSIFIER_SYSTEM = """You are an intent classifier for a stock trading assistant.
@@ -81,6 +81,7 @@ Intents:
   earnings  → user wants upcoming earnings dates, estimates, or pre-earnings thesis for a stock
   mtf       → user wants multi-timeframe (15m/daily/weekly) technical analysis of a stock
   optimize  → user wants to rebalance or optimize their portfolio against a target allocation
+  digest    → user wants the weekly trading digest, journal summary, or lessons learned
   help      → greeting, or asking what the bot can do
   unknown   → message does not match any category
 
@@ -148,7 +149,7 @@ _SKIP_WORDS = frozenset({
     "RUN", "CHECK", "MY", "WATCH", "UNWATCH", "TRACK", "FOLLOW",
     "WATCHLIST", "REMOVE", "ADD", "STOP", "EARNINGS", "WHEN", "REPORT",
     "UPCOMING", "REPORTS", "DOES", "MTF", "MULTI", "TIMEFRAME",
-    "OPTIMIZE", "REBALANCE", "ALLOCATION",
+    "OPTIMIZE", "REBALANCE", "ALLOCATION", "DIGEST", "JOURNAL", "WEEKLY",
 })
 
 
@@ -172,6 +173,8 @@ def _parse_intent_fallback(text: str) -> tuple[str, list[str]]:
         return "mtf", tickers
     if re.search(r"optimize|optimise|rebalance|re.?balance|allocation|target.*alloc", text, re.IGNORECASE):
         return "optimize", []
+    if re.search(r"digest|journal|weekly.*summary|lessons.*learned|trading.*summary", text, re.IGNORECASE):
+        return "digest", []
     if re.search(r"earnings|when.*report|upcoming.*earn|earn.*date|report.*date", text, re.IGNORECASE):
         return "earnings", tickers
     if re.search(r"unwatch|stop\s+watch|stop\s+track|remove.*watch", text, re.IGNORECASE) and tickers:
@@ -397,6 +400,24 @@ def _dispatch_full(
             return f"ℹ️ {exc}", False, None
         except Exception as exc:
             return f"❌ Optimizer error: {exc}", False, None
+
+    if intent == "digest":
+        from orchestrator.journal_agent import build_weekly_digest
+        try:
+            digest = build_weekly_digest()
+            if digest.get("status") == "skipped":
+                trades_available = digest.get("trades_analyzed", 0)
+                return (
+                    f"ℹ️ Not enough closed trades for a full digest "
+                    f"(need 3, have {trades_available}). "
+                    f"Close some positions first or check back after market hours."
+                ), False, None
+            return (
+                f"📖 **Weekly Trading Digest — {digest.get('week_of', 'This Week')}**\n\n"
+                f"{digest.get('summary', '')}"
+            ), False, None
+        except Exception as exc:
+            return f"❌ Digest error: {exc}", False, None
 
     if intent == "mtf":
         from orchestrator.mtf_agent import analyze_ticker_mtf, analyze_tickers_mtf, format_mtf_markdown
