@@ -220,7 +220,6 @@ def _compute_proposals(
         else:
             # No filled position yet — fetch price to estimate value
             try:
-                from stock_agent.tools import get_current_price
                 pd    = get_current_price(ticker)
                 price = float(pd.get("current_price") or 0)
             except Exception:
