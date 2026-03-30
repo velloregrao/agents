@@ -47,7 +47,7 @@ load_dotenv(_AGENTS_ROOT / "stock-analysis-agent" / ".env")
 
 import anthropic
 
-from stock_agent.alpaca_tools import get_account_balance, get_positions, place_order
+from stock_agent.alpaca_tools import get_account_balance, get_positions, get_open_orders, place_order
 from stock_agent.tools import get_current_price
 from orchestrator.risk_agent import evaluate_proposal, Verdict
 from orchestrator.alert_manager import (
@@ -170,6 +170,7 @@ def _compute_proposals(
     equity:            float,
     target_allocation: dict[str, float],
     settings:          dict,
+    pending_buys:      dict[str, float] | None = None,
 ) -> list[TradeProposal]:
     """
     Compute the raw list of trade proposals from allocation drift.
@@ -177,12 +178,17 @@ def _compute_proposals(
     Sells are computed first so the refinement pass can determine available
     cash for buys.  Within each side, proposals are sorted by abs(drift_pct)
     descending so the biggest drifts are addressed first.
+
+    pending_buys: ticker → qty already queued in open (unfilled) buy orders.
+    These shares are counted as if already held so a second Optimize call
+    while orders are pending doesn't double-buy the same position.
     """
     if equity <= 0:
         return []
 
     min_trade_value  = float(settings.get("min_trade_value",  50.0))
     reduce_untracked = bool(settings.get("reduce_untracked",  False))
+    pending_buys     = pending_buys or {}
 
     # Build current allocation map: ticker → {market_value, current_pct, qty, price}
     current: dict[str, dict] = {}
@@ -194,6 +200,39 @@ def _compute_proposals(
             "qty":          float(pos.get("quantity", 0)),
             "price":        float(pos.get("current_price", 0)),
         }
+
+    # Merge pending buy orders into current allocation so drift is computed
+    # against (filled positions + in-flight orders).  Uses the filled price
+    # if available, otherwise falls back to get_current_price().
+    for ticker, pending_qty in pending_buys.items():
+        ticker = ticker.upper()
+        if pending_qty <= 0:
+            continue
+        if ticker in current:
+            # Position exists — add pending shares at current price
+            price         = current[ticker]["price"]
+            extra_value   = pending_qty * price
+            new_qty       = current[ticker]["qty"] + pending_qty
+            new_mv        = current[ticker]["market_value"] + extra_value
+            current[ticker]["qty"]          = new_qty
+            current[ticker]["market_value"] = new_mv
+            current[ticker]["current_pct"]  = new_mv / equity
+        else:
+            # No filled position yet — fetch price to estimate value
+            try:
+                from stock_agent.tools import get_current_price
+                pd    = get_current_price(ticker)
+                price = float(pd.get("current_price") or 0)
+            except Exception:
+                price = 0.0
+            if price > 0:
+                mv = pending_qty * price
+                current[ticker] = {
+                    "market_value": mv,
+                    "current_pct":  mv / equity,
+                    "qty":          pending_qty,
+                    "price":        price,
+                }
 
     proposals: list[TradeProposal] = []
 
@@ -419,8 +458,9 @@ def build_rebalance_plan(user_id: str) -> RebalancePlan:
     Never executes trades — plan requires Teams approval.
     """
     # ── Fetch portfolio state ──────────────────────────────────────────────────
-    account  = get_account_balance()
-    pos_data = get_positions()
+    account   = get_account_balance()
+    pos_data  = get_positions()
+    ord_data  = get_open_orders()
 
     if account.get("error"):
         raise RuntimeError(f"Cannot fetch account: {account['error']}")
@@ -428,6 +468,20 @@ def build_rebalance_plan(user_id: str) -> RebalancePlan:
     equity    = float(account.get("equity",        0))
     cash      = float(account.get("buying_power",  0))
     positions = pos_data.get("positions", [])
+
+    # Build pending buys map: ticker → total unfilled buy qty
+    # Prevents double-buying when orders are accepted but not yet filled
+    pending_buys: dict[str, float] = {}
+    for o in ord_data.get("open_orders", []):
+        t = o["ticker"].upper()
+        pending_buys[t] = pending_buys.get(t, 0.0) + float(o["quantity"])
+
+    if pending_buys:
+        print(
+            f"[optimizer] {len(pending_buys)} ticker(s) have pending buy orders "
+            f"— treating as filled for drift calculation: {list(pending_buys.keys())}",
+            file=sys.stderr,
+        )
 
     # ── Load config ────────────────────────────────────────────────────────────
     cfg               = load_target_allocation()
@@ -440,7 +494,7 @@ def build_rebalance_plan(user_id: str) -> RebalancePlan:
         )
 
     # ── Generator: compute raw proposals ─────────────────────────────────────
-    proposals = _compute_proposals(positions, equity, target_allocation, settings)
+    proposals = _compute_proposals(positions, equity, target_allocation, settings, pending_buys)
 
     if not proposals:
         raise ValueError(
