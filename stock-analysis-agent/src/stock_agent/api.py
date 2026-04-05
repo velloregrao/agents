@@ -99,7 +99,7 @@ async def api_key_middleware(request: Request, call_next):
     When AGENT_API_KEY is not set the middleware is a transparent no-op,
     keeping local development zero-friction.
     """
-    if _API_KEY and request.url.path not in _AUTH_EXEMPT:
+    if _API_KEY and request.method != "OPTIONS" and request.url.path not in _AUTH_EXEMPT:
         provided = (
             request.headers.get("X-API-Key")
             or request.query_params.get("api_key")
