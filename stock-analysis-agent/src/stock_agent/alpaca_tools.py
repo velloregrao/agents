@@ -236,6 +236,40 @@ def cancel_order(order_id: str) -> dict:
         return {"error": str(e)}
 
 
+def cancel_all_orders() -> dict:
+    """
+    Cancel all open orders on the paper account.
+    Returns a summary of how many were cancelled and any failures.
+    """
+    try:
+        from alpaca.trading.requests import GetOrdersRequest
+        from alpaca.trading.enums import QueryOrderStatus
+        client = _get_client()
+
+        open_orders = client.get_orders(GetOrdersRequest(status=QueryOrderStatus.OPEN))
+        if not open_orders:
+            return {"cancelled": 0, "failed": 0, "message": "No open orders to cancel."}
+
+        cancelled, failed = 0, []
+        for order in open_orders:
+            try:
+                client.cancel_order_by_id(order.id)
+                cancelled += 1
+            except Exception as e:
+                failed.append({"order_id": str(order.id), "ticker": order.symbol, "error": str(e)})
+
+        return {
+            "cancelled": cancelled,
+            "failed":    len(failed),
+            "failures":  failed,
+            "message":   f"Cancelled {cancelled} order(s)." + (
+                f" {len(failed)} failed." if failed else ""
+            ),
+        }
+    except Exception as e:
+        return {"error": str(e), "cancelled": 0, "failed": 0}
+
+
 def close_position(ticker: str) -> dict:
     """
     Close an entire position for a ticker.

@@ -132,6 +132,20 @@ def sync_closed_trades() -> dict:
                 f"P&L: {result.get('pnl_pct', 0):+.1f}%",
                 flush=True,
             )
+            # ── Phase 2: embed closed trade into vector store ──────────────
+            try:
+                from orchestrator.vector_store import embed_closed_trade
+                embed_closed_trade({
+                    **trade,
+                    "exit_price": exit_price,
+                    "pnl":        result.get("pnl"),
+                    "pnl_pct":    result.get("pnl_pct"),
+                    "hold_days":  result.get("hold_days"),
+                })
+                print(f"[journal] embedded {ticker} trade into vector store", flush=True)
+            except Exception as vec_exc:
+                # Non-fatal — journal sync succeeds even if vector embed fails
+                print(f"[journal] vector embed failed for {ticker}: {vec_exc}", file=sys.stderr)
 
     return {
         "synced":  synced,

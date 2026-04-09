@@ -1,0 +1,27 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  body { @apply bg-bg text-white font-sans m-0; }
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { @apply bg-bg; }
+  ::-webkit-scrollbar-thumb { @apply bg-border rounded-full; }
+}
+
+@layer components {
+  .card { @apply bg-surface border border-border rounded-lg p-4; }
+  .btn-primary { @apply bg-accent hover:bg-blue-500 text-white font-medium px-4 py-2 rounded-lg transition-colors cursor-pointer; }
+  .btn-ghost { @apply text-muted hover:text-white hover:bg-surface px-4 py-2 rounded-lg transition-colors cursor-pointer border-0 bg-transparent; }
+  .btn-danger { @apply border border-negative text-negative hover:bg-negative hover:text-white px-4 py-2 rounded-lg transition-colors cursor-pointer bg-transparent; }
+  .stat-value { @apply font-mono text-2xl font-normal text-white; }
+  .stat-label { @apply text-xs text-muted font-sans; }
+  .badge-approved { @apply bg-green-500/10 text-green-400 text-xs px-2 py-0.5 rounded-full; }
+  .badge-resize   { @apply bg-blue-500/10 text-blue-400 text-xs px-2 py-0.5 rounded-full; }
+  .badge-escalate { @apply bg-yellow-500/10 text-yellow-400 text-xs px-2 py-0.5 rounded-full; }
+  .badge-blocked  { @apply bg-gray-500/10 text-gray-400 text-xs px-2 py-0.5 rounded-full; }
+  .badge-buy      { @apply bg-green-500/10 text-green-400 text-xs px-2 py-0.5 rounded-full; }
+  .badge-sell     { @apply bg-red-500/10 text-red-400 text-xs px-2 py-0.5 rounded-full; }
+}

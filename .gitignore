@@ -57,3 +57,16 @@ appPackage/build
 # Logs
 *.log
 devTools/*.log
+data/
+
+# Managed agents registry — contains real Anthropic API resource IDs
+.agent_registry.json
+
+# Generated slide decks
+*.pptx
+*.potx
+
+# Binary design assets
+tools/gartner-logo-navy.png
+tools/gartner-logo-white.png
+tools/screens/

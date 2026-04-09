@@ -1,0 +1,195 @@
+{
+  "file_key": "AKY9gbLVORYKigCUNyNBZU",
+  "file_name": "Untitled",
+  "last_modified": "2026-04-05T16:23:19Z",
+  "screens": [
+    {
+      "name": "Design Stock Copilot Dashboard (Copy)",
+      "type": "FRAME",
+      "id": "1:241",
+      "width": 1467.0,
+      "height": 779.0,
+      "depth": 1
+    },
+    {
+      "name": "Design Stock Copilot Dashboard (Copy)",
+      "type": "FRAME",
+      "id": "1:481",
+      "width": 1467.0,
+      "height": 779.0,
+      "depth": 1
+    },
+    {
+      "name": "Design Stock Copilot Dashboard (Copy)",
+      "type": "FRAME",
+      "id": "1:1391",
+      "width": 1467.0,
+      "height": 779.0,
+      "depth": 1
+    },
+    {
+      "name": "Design Stock Copilot Dashboard (Copy)",
+      "type": "FRAME",
+      "id": "1:1721",
+      "width": 1467.0,
+      "height": 779.0,
+      "depth": 1
+    }
+  ],
+  "colors": [
+    {
+      "element": "App",
+      "hex": "#0F1117",
+      "opacity": 1.0
+    },
+    {
+      "element": "App",
+      "hex": "#1A1D27",
+      "opacity": 1.0
+    },
+    {
+      "element": "Button",
+      "hex": "#3B82F6",
+      "opacity": 1.0
+    }
+  ],
+  "typography": [
+    {
+      "name": "Stock Copilot",
+      "fontFamily": "Inter",
+      "fontSize": 20.0,
+      "fontWeight": 500,
+      "lineHeight": 28.0,
+      "letterSpacing": 0.0
+    },
+    {
+      "name": "JD",
+      "fontFamily": "Inter",
+      "fontSize": 14.0,
+      "fontWeight": 400,
+      "lineHeight": 20.0,
+      "letterSpacing": 0.0
+    },
+    {
+      "name": "Portfolio Value",
+      "fontFamily": "Inter",
+      "fontSize": 12.0,
+      "fontWeight": 400,
+      "lineHeight": 16.0,
+      "letterSpacing": 0.0
+    },
+    {
+      "name": "$99,420",
+      "fontFamily": "Menlo",
+      "fontSize": 24.0,
+      "fontWeight": 400,
+      "lineHeight": 32.0,
+      "letterSpacing": 0.0
+    },
+    {
+      "name": "-0.61%",
+      "fontFamily": "Menlo",
+      "fontSize": 14.0,
+      "fontWeight": 400,
+      "lineHeight": 20.0,
+      "letterSpacing": 0.0
+    },
+    {
+      "name": "Ticker",
+      "fontFamily": "Inter",
+      "fontSize": 12.0,
+      "fontWeight": 700,
+      "lineHeight": 16.0,
+      "letterSpacing": 0.0
+    },
+    {
+      "name": "\u26a0\ufe0f",
+      "fontFamily": "Inter",
+      "fontSize": 18.0,
+      "fontWeight": 400,
+      "lineHeight": 28.0,
+      "letterSpacing": 0.0
+    },
+    {
+      "name": "Analyze AMD",
+      "fontFamily": "Inter",
+      "fontSize": 12.0,
+      "fontWeight": 500,
+      "lineHeight": 16.0,
+      "letterSpacing": 0.0
+    },
+    {
+      "name": "Analyze",
+      "fontFamily": "Inter",
+      "fontSize": 14.0,
+      "fontWeight": 500,
+      "lineHeight": 20.0,
+      "letterSpacing": 0.0
+    },
+    {
+      "name": "AMD Technical Analysis",
+      "fontFamily": "Inter",
+      "fontSize": 18.0,
+      "fontWeight": 500,
+      "lineHeight": 27.0,
+      "letterSpacing": 0.0
+    },
+    {
+      "name": "Reject",
+      "fontFamily": "Inter",
+      "fontSize": 16.0,
+      "fontWeight": 500,
+      "lineHeight": 24.0,
+      "letterSpacing": 0.0
+    },
+    {
+      "name": "Signals Feed",
+      "fontFamily": "Inter",
+      "fontSize": 24.0,
+      "fontWeight": 500,
+      "lineHeight": 32.0,
+      "letterSpacing": 0.0
+    },
+    {
+      "name": "TSLA",
+      "fontFamily": "Menlo",
+      "fontSize": 18.0,
+      "fontWeight": 400,
+      "lineHeight": 28.0,
+      "letterSpacing": 0.0
+    },
+    {
+      "name": "87%",
+      "fontFamily": "Menlo",
+      "fontSize": 12.0,
+      "fontWeight": 400,
+      "lineHeight": 16.0,
+      "letterSpacing": 0.0
+    },
+    {
+      "name": "0",
+      "fontFamily": "Menlo",
+      "fontSize": 30.0,
+      "fontWeight": 400,
+      "lineHeight": 36.0,
+      "letterSpacing": 0.0
+    },
+    {
+      "name": "?",
+      "fontFamily": "Inter",
+      "fontSize": 64.0,
+      "fontWeight": 400,
+      "lineHeight": 77.45454406738281,
+      "letterSpacing": 0.0
+    },
+    {
+      "name": "35%",
+      "fontFamily": "Menlo",
+      "fontSize": 36.0,
+      "fontWeight": 400,
+      "lineHeight": 40.0,
+      "letterSpacing": 0.0
+    }
+  ],
+  "style_count": 0
+}

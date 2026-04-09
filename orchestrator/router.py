@@ -62,6 +62,7 @@ _VALID_INTENTS = frozenset({
     "analyze", "research", "trade", "portfolio",
     "reflect", "monitor", "help", "unknown",
     "watch", "unwatch", "watchlist", "earnings", "mtf", "optimize", "digest",
+    "cancel",
 })
 
 _CLASSIFIER_SYSTEM = """You are an intent classifier for a stock trading assistant.
@@ -82,6 +83,7 @@ Intents:
   mtf       → user wants multi-timeframe (15m/daily/weekly) technical analysis of a stock
   optimize  → user wants to rebalance or optimize their portfolio against a target allocation
   digest    → user wants the weekly trading digest, journal summary, or lessons learned
+  cancel    → user wants to cancel open orders (all orders, or a specific order)
   help      → greeting, or asking what the bot can do
   unknown   → message does not match any category
 
@@ -435,14 +437,69 @@ def _dispatch_full(
         return "\n\n---\n\n".join(format_mtf_markdown(r) for r in results), False, None
 
     if intent == "analyze" and tickers:
-        return run_analysis(tickers[0]), False, None
+        ticker = tickers[0]
+        analysis_text = run_analysis(ticker)
+
+        # ── Phase 2: inject vector similarity context ──────────────────────
+        try:
+            from orchestrator.vector_store import query_similar_trades
+            similar = query_similar_trades(ticker, rsi=50.0, side="BUY", n=5)
+            if similar:
+                lines = [
+                    f"### 📚 Historical context — {len(similar)} similar trade(s) for {ticker}\n",
+                ]
+                for i, t in enumerate(similar, 1):
+                    meta = t.get("metadata", {})
+                    pnl  = meta.get("pnl_pct")
+                    rsi_ = meta.get("rsi")
+                    side_ = meta.get("side", "?")
+                    hd   = meta.get("hold_days")
+                    date = meta.get("entry_date", "")[:10]
+                    pnl_str = f"{pnl:+.1f}%" if pnl is not None else "N/A"
+                    rsi_str = f"{rsi_:.1f}" if rsi_ is not None else "N/A"
+                    hd_str  = f"{hd}d" if hd is not None else "N/A"
+                    lines.append(
+                        f"  {i}. **{date}** | {side_} | RSI {rsi_str} | "
+                        f"P&L {pnl_str} | held {hd_str}"
+                    )
+                lines.append("")   # blank line before analysis
+                vector_context = "\n".join(lines)
+                analysis_text  = vector_context + "\n" + analysis_text
+        except Exception as vec_exc:
+            # Non-fatal — analysis still returned even if vector store fails
+            import sys as _sys
+            print(f"[router] vector context fetch failed: {vec_exc}", file=_sys.stderr)
+
+        return analysis_text, False, None
 
     if intent == "research" and tickers:
         request = raw_text or f"Research {tickers[0]} and give me a detailed buy/hold/sell recommendation"
         return run_research_orchestrator(tickers[0], request), False, None
 
     if intent == "trade" and tickers:
-        # ── Phase 3 risk gate ─────────────────────────────────────────────────
+        # ── Phase 4: pre-analysis via managed agent (vector-enriched) ─────────
+        # Run an analysis session for each ticker before the risk gate.
+        # This is non-blocking — the risk gate still enforces hard rules.
+        analysis_cache: dict[str, str] = {}
+        try:
+            from orchestrator.managed_agents import get_or_create_agents
+            from orchestrator.session_orchestrator import (
+                run_analysis_session, _get_vector_context
+            )
+            agent_ids = get_or_create_agents()
+            for t in tickers:
+                vec_ctx = _get_vector_context(t, rsi=50.0, side="BUY")
+                analysis = run_analysis_session(
+                    ticker=t,
+                    agent_id=agent_ids["analysis"],
+                    vector_context=vec_ctx,
+                )
+                analysis_cache[t] = analysis.get("analysis", "")
+        except Exception as _pa_exc:
+            import sys as _sys
+            print(f"[router] pre-analysis session skipped: {_pa_exc}", file=_sys.stderr)
+
+        # ── Risk gate (mandatory — never bypass) ──────────────────────────────
         # Fetch account once for the whole batch
         account = get_account_balance()
         equity  = account.get("equity", 0) if not account.get("error") else 0
@@ -498,6 +555,11 @@ def _dispatch_full(
 
         if approved:
             approved_tickers = [t for t, _ in approved]
+            # Prepend managed-agent analysis summaries for approved tickers
+            for t in approved_tickers:
+                if t in analysis_cache and analysis_cache[t]:
+                    summary = analysis_cache[t][:600].rstrip()
+                    lines.insert(0, f"### AI Analysis — {t}\n{summary}…\n")
             lines.append(run_trading_agent(approved_tickers, raw_text or None))
 
         if not lines:
@@ -505,6 +567,21 @@ def _dispatch_full(
 
         requires_approval = len(escalated) > 0
         return "\n\n".join(lines), requires_approval, escalation_context
+
+    if intent == "cancel":
+        from stock_agent.alpaca_tools import cancel_all_orders
+        result    = cancel_all_orders()
+        cancelled = result.get("cancelled", 0)
+        failed    = result.get("failed", 0)
+        if "error" in result:
+            return f"⚠️ Could not cancel orders: {result['error']}", False, None
+        if cancelled == 0 and failed == 0:
+            return "No open orders to cancel.", False, None
+        lines = [f"🗑️ **Cancelled {cancelled} open order(s).**"]
+        if failed:
+            lines.append(f"⚠️ {failed} order(s) could not be cancelled — they may have already filled.")
+        lines.append("\nRun **Optimize** again to retry the rebalance.")
+        return "\n".join(lines), False, None
 
     if intent == "portfolio":
         return _format_portfolio(), False, None
