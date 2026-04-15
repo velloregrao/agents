@@ -52,6 +52,28 @@ interface PortfolioResponse {
   positions: { positions: Position[] }
 }
 
+// ── Signals feed types ────────────────────────────────────────────────────────
+
+export interface SignalData {
+  ticker:         string
+  name:           string
+  price:          number
+  change_pct:     number
+  signal:         'BUY SIGNAL' | 'SELL SIGNAL' | 'WATCH'
+  rsi:            number
+  ema_signal:     'BULLISH' | 'BEARISH' | 'NEUTRAL'
+  momentum_score: number
+  confidence:     number
+  as_of:          string
+}
+
+export interface SignalsFeedResponse {
+  signals:           SignalData[]
+  source:            'watchlist' | 'default'
+  tickers_requested: string[]
+  as_of:             string
+}
+
 // ── IPO Watch types ────────────────────────────────────────────────────────────
 
 export interface IpoWatchBreakdown {
@@ -148,6 +170,10 @@ export const api = {
 
   // ── Health ────────────────────────────────────────────────────────────────
   health: () => get<{ status: string }>('/health'),
+
+  // ── Signals feed ──────────────────────────────────────────────────────────
+  // GET /signals?user_id=<id> — live RSI/EMA/MACD for watchlist (or default tickers)
+  signals: (user_id = 'web-user') => get<SignalsFeedResponse>(`/signals?user_id=${encodeURIComponent(user_id)}`),
 
   // ── IPO Watch ─────────────────────────────────────────────────────────────
   ipoWatchStatus: () => get<IpoWatchStatusResponse>('/ipo-watch/status'),

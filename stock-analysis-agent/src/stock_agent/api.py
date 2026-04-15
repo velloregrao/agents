@@ -263,6 +263,140 @@ def portfolio():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ── Live signals feed ─────────────────────────────────────────────────────────
+
+@app.get("/signals")
+def signals_feed(user_id: str = "default"):
+    """
+    Return live technical signals for the user's watchlist tickers.
+    Falls back to a hardcoded default set if the watchlist is empty.
+
+    Computes RSI-14, EMA-12/26, MACD, and SMA-50 via yfinance concurrently
+    (one ThreadPoolExecutor per ticker).  No Claude calls — pure math.
+
+    Signal labels:
+      BUY SIGNAL  — RSI<35 (oversold), or MACD>0 + price>SMA50
+      SELL SIGNAL — RSI>65 (overbought), or MACD<0 + price<SMA50
+      WATCH       — everything else
+
+    Returns a list sorted by confidence descending so strongest signals appear first.
+    """
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+    from datetime import datetime, timezone
+    import yfinance as yf
+    from stock_agent.watchlist import get_watchlist
+
+    DEFAULT_TICKERS = ["TSLA", "META", "NVDA", "AMZN", "COIN", "SQ"]
+    watchlist = get_watchlist(user_id)
+    tickers   = watchlist if watchlist else DEFAULT_TICKERS
+    source    = "watchlist" if watchlist else "default"
+
+    def _fetch_signal(ticker: str) -> dict:
+        try:
+            stock = yf.Ticker(ticker)
+            info  = stock.info
+            hist  = stock.history(period="6mo")
+
+            if hist.empty or len(hist) < 15:
+                return {"ticker": ticker, "error": "insufficient history"}
+
+            name       = info.get("shortName") or info.get("longName") or ticker
+            price_raw  = info.get("currentPrice") or info.get("regularMarketPrice")
+            prev_close = info.get("previousClose") or info.get("regularMarketPreviousClose")
+            price      = float(price_raw or hist["Close"].iloc[-1])
+            prev       = float(prev_close or hist["Close"].iloc[-2])
+            change_pct = round((price - prev) / prev * 100, 2) if prev else 0.0
+
+            close = hist["Close"].dropna()
+
+            # RSI-14
+            delta = close.diff()
+            gain  = delta.clip(lower=0).rolling(14).mean()
+            loss  = (-delta.clip(upper=0)).rolling(14).mean()
+            rs    = gain / loss
+            rsi   = round(float(100 - (100 / (1 + rs.iloc[-1]))), 1)
+
+            # EMA-12, EMA-26, MACD
+            ema_12    = float(close.ewm(span=12, adjust=False).mean().iloc[-1])
+            ema_26    = float(close.ewm(span=26, adjust=False).mean().iloc[-1])
+            macd_line = ema_12 - ema_26
+
+            # SMA-50
+            sma_50 = float(close.rolling(50).mean().iloc[-1]) if len(close) >= 50 else price
+
+            # EMA trend label (±0.5% tolerance)
+            if   price > ema_26 * 1.005: ema_signal = "BULLISH"
+            elif price < ema_26 * 0.995: ema_signal = "BEARISH"
+            else:                         ema_signal = "NEUTRAL"
+
+            # Signal label (RSI extremes take priority)
+            if rsi < 35:
+                signal = "BUY SIGNAL"
+            elif rsi > 65:
+                signal = "SELL SIGNAL"
+            elif macd_line > 0 and price > sma_50:
+                signal = "BUY SIGNAL"
+            elif macd_line < 0 and price < sma_50:
+                signal = "SELL SIGNAL"
+            else:
+                signal = "WATCH"
+
+            # Momentum score (0–10)
+            score = 5.0
+            if   rsi < 35: score += 2.5
+            elif rsi < 45: score += 1.0
+            elif rsi > 65: score -= 2.5
+            elif rsi > 55: score -= 1.0
+            score += 1.5 if macd_line > 0 else -1.5
+            score += 1.0 if price > sma_50 else -1.0
+            score = max(0.0, min(10.0, round(score, 1)))
+
+            # Confidence: fraction of 4 indicators agreeing on direction
+            bull, bear = 0, 0
+            if   rsi < 45: bull += 1
+            elif rsi > 55: bear += 1
+            if macd_line > 0: bull += 1
+            else:             bear += 1
+            if price > sma_50: bull += 1
+            else:              bear += 1
+            if   ema_signal == "BULLISH": bull += 1
+            elif ema_signal == "BEARISH": bear += 1
+            total      = bull + bear
+            confidence = round((max(bull, bear) / total) * 100) if total else 50
+
+            return {
+                "ticker":         ticker,
+                "name":           name,
+                "price":          round(price, 2),
+                "change_pct":     change_pct,
+                "signal":         signal,
+                "rsi":            rsi,
+                "ema_signal":     ema_signal,
+                "momentum_score": score,
+                "confidence":     confidence,
+                "as_of":          datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
+            }
+        except Exception as exc:
+            return {"ticker": ticker, "error": str(exc)}
+
+    signals: list[dict] = []
+    with ThreadPoolExecutor(max_workers=min(len(tickers), 6)) as pool:
+        futures = {pool.submit(_fetch_signal, t): t for t in tickers}
+        for fut in as_completed(futures):
+            res = fut.result()
+            if res and "error" not in res:
+                signals.append(res)
+
+    signals.sort(key=lambda s: s.get("confidence", 0), reverse=True)
+
+    return {
+        "signals":           signals,
+        "source":            source,
+        "tickers_requested": tickers,
+        "as_of":             datetime.now(timezone.utc).isoformat(),
+    }
+
+
 # ── Run reflection ────────────────────────────────────────────────────────────
 
 @app.post("/reflect")
