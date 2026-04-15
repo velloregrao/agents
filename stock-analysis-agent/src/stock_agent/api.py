@@ -61,9 +61,15 @@ from stock_agent.trading_agent import run_trading_agent, monitor_positions
 from stock_agent.reflection import reflect
 from stock_agent.research import run_research_orchestrator
 
-# Make orchestrator/ importable from api.py
-# (agents root is 3 levels above this file: src/stock_agent/api.py → agents/)
-_AGENTS_ROOT = Path(__file__).resolve().parent.parent.parent.parent
+# Make orchestrator/ importable from api.py.
+# Local:     agents/stock-analysis-agent/src/stock_agent/api.py → 4 parents = agents/
+# Container: /app/src/stock_agent/api.py                        → 3 parents = /app/
+# Walk up until we find orchestrator/ to handle both layouts.
+_HERE = Path(__file__).resolve()
+_AGENTS_ROOT = next(
+    p for p in [_HERE.parent.parent.parent, _HERE.parent.parent.parent.parent]
+    if (p / "orchestrator").exists()
+)
 sys.path.insert(0, str(_AGENTS_ROOT))
 
 from orchestrator.router import route as _route
