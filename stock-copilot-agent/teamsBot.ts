@@ -537,7 +537,7 @@ interface IpoWatchPayload {
 }
 
 function buildIpoWatchCard(alert: PendingAlert) {
-  const p      = alert.signal as IpoWatchPayload;
+  const p      = alert.signal as unknown as IpoWatchPayload;
   const { id } = alert;
   const bd     = p.breakdown ?? {} as IpoWatchBreakdown;
 
