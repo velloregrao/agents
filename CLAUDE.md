@@ -11,7 +11,8 @@ semantic trade memory, human-in-the-loop approvals, and a web UI. Built for pape
 - **Anthropic Managed Agents SDK** (v0.92.0) — persistent named agents with server-side state
 - **ChromaDB** (local) / **Azure AI Search** (production) — vector store for semantic trade memory
 - **Alpaca Markets API** (alpaca-py) — US equities execution, paper trading by default
-- **Brave Search API** — market news and sentiment
+- **Brave Search API** — market news, sentiment, and IPO signal detection
+- **yfinance** — technical indicators (RSI/EMA/MACD/SMA), price history, proxy momentum
 - **Azure Bot Service / TeamsFx** — Microsoft Teams interface
 - **FastAPI + uvicorn** — Python HTTP API (deployed to Azure Container Apps)
 - **React 19 + Vite + Tailwind CSS** — web UI (deployed to Azure Static Web Apps)
@@ -22,8 +23,43 @@ semantic trade memory, human-in-the-loop approvals, and a web UI. Built for pape
 - **Python API**: Azure Container Apps (`python-api.salmonsky-548aa144.eastus.azurecontainerapps.io`)
 - **Web UI**: Azure Static Web Apps
 - **Teams bot**: Azure Bot Service
-- **CI/CD**: GitHub Actions on push to `main` (`.github/workflows/deploy-python-api.yml`)
+- **CI/CD — Python API**: `.github/workflows/deploy-python-api.yml` — triggers on `stock-analysis-agent/**`, `orchestrator/**`, `ipo-watch/**`
+- **CI/CD — Web UI**: `.github/workflows/deploy-web-ui.yml` — triggers on `stock-copilot-web/**`
 - **Container registry**: Azure Container Registry (ACR)
+
+---
+
+## Build status (as of 2026-04-15)
+
+| Phase | Feature | Status |
+|---|---|---|
+| Core infra | FastAPI + Alpaca + SQLite + CI/CD | ✅ Live |
+| Phase 1 | Multi-agent foundation — Haiku intent router, 16 intents, managed agents | ✅ Live |
+| Phase 2 | Vector semantic memory — ChromaDB, top-5 context injection | ✅ Live |
+| Phase 3 | Risk gate — 4 hard rules, BLOCK/RESIZE/ESCALATE/APPROVE | ✅ Live |
+| Phase 4 | Session orchestrator pipeline — vector → managed agent → risk → execution | ✅ Live |
+| Phase 5 | Human-in-the-loop approvals — web UI ApprovalCard + Teams Adaptive Cards | ✅ Live |
+| Phase 6 | Watchlist monitor — per-user watchlist, 15-min cron, proactive Teams alerts | ✅ Live |
+| Phase 7 | Portfolio optimizer — generator→critic→rebalance plan→approval→execution | ✅ Live |
+| Phase 8 | Trade journal + digest — auto-embed closed trades, weekly Claude reflection | ✅ Live |
+| Phase 9 | Earnings intelligence — calendar + Brave research + pre-earnings thesis | ✅ Live |
+| Phase 10 | Multi-timeframe analysis — 15m + daily + weekly per ticker | ✅ Live |
+| Phase 11 | Research pipeline — Brave search → Claude buy/hold/sell thesis | ✅ Live |
+| IPO-1 | IPO Watch profiles (SPCE/OAII/ANTHR) + SQLite state tables | ✅ Live |
+| IPO-2 | Signals engine — proxy momentum, Brave news, S-1/roadshow detection, Haiku sentiment | ✅ Live |
+| IPO-3 | Alerts engine — dedup guard, Teams Adaptive Cards, alert_queue integration | ✅ Live |
+| IPO-4 | APScheduler job (every 4 hrs), API endpoints `/ipo-watch/*` | ✅ Live |
+| IPO-5 | Web UI IpoWatch.tsx tab — signal cards, score bar, breakdown pills | ✅ Live |
+| IPO-6 | Chat intent `ipo_watch` — "ipo watch / ipo status / ipo signals" in chat | ✅ Live |
+| Signals feed | Live RSI/EMA/MACD cards from `GET /signals` — replaces hardcoded mock data | ✅ Live |
+
+### Known gaps (not yet built)
+| Item | Notes |
+|---|---|
+| Azure AI Search adapter | `VECTOR_BACKEND=azure` path not built — ChromaDB resets on container redeploy |
+| SQLite persistence | No Azure Files volume mounted — trade memory resets on container restart |
+| Container App startup probe | `/health/deep` exists but not wired as startup probe in ACA definition |
+| Live trading | Everything is paper trading; `ALPACA_BASE_URL` points to paper API |
 
 ---
 
@@ -37,7 +73,7 @@ agents/
 ├── .agent_registry.json                   ← managed agent IDs (gitignored, local only)
 │
 ├── orchestrator/                          ← brain of the system
-│   ├── router.py                          ← intent classifier + pipeline coordinator
+│   ├── router.py                          ← intent classifier + pipeline coordinator (16 intents)
 │   ├── risk_agent.py                      ← generator-critic risk gate (4 hard rules)
 │   ├── managed_agents.py                  ← Anthropic managed agent registration
 │   ├── session_orchestrator.py            ← session-based multi-agent pipeline
@@ -46,42 +82,56 @@ agents/
 │   ├── journal_agent.py                   ← trade journal sync + auto-embedding
 │   ├── approval_manager.py                ← pending approval persistence
 │   ├── alert_manager.py                   ← Teams / web alert dispatch
-│   ├── mtf_analysis.py                    ← multi-timeframe technical analysis
-│   ├── scheduler.py                       ← APScheduler cron jobs
+│   ├── earnings_agent.py                  ← earnings calendar + Brave research + thesis
+│   ├── watchlist_monitor.py               ← signal scoring for watchlist tickers
+│   ├── scheduler.py                       ← APScheduler cron jobs (watchlist scan, IPO watch, journal)
 │   └── contracts.py                       ← shared data types (AgentMessage etc.)
+│
+├── ipo-watch/                             ← IPO Watch subsystem
+│   ├── profiles.py                        ← load_profile(), load_all_active_profiles(), list_profiles()
+│   ├── signals.py                         ← compute_signal(), run_all_signals() — yfinance + Brave + Haiku
+│   ├── alerts.py                          ← dispatch_alert(), Teams Adaptive Cards, dedup guard
+│   ├── scheduler_integration.py           ← run_ipo_watch_scan(), get_current_status()
+│   └── ipo_profiles/
+│       ├── SPCE.json                      ← SpaceX, $1.75T, Jun-Jul 2026, proxy: SATS/RKLB/GOOGL
+│       ├── OAII.json                      ← OpenAI, $852B, Q4 2026, proxy: MSFT/NVDA
+│       └── ANTHR.json                     ← Anthropic, $380B, Q4 2026, proxy: AMZN/GOOGL
 │
 ├── stock-analysis-agent/                  ← Python API container
 │   ├── pyproject.toml                     ← dependencies (anthropic>=0.92.0, chromadb>=1.5.0)
-│   ├── Dockerfile                         ← build context is repo root
+│   ├── Dockerfile                         ← build context is repo root; copies orchestrator/, ipo-watch/, config/
 │   └── src/stock_agent/
 │       ├── api.py                         ← FastAPI app, all HTTP endpoints
 │       ├── agent.py                       ← Claude analysis agent (RSI/EMA/VWAP)
 │       ├── alpaca_tools.py                ← Alpaca SDK wrappers (positions, orders, cancel)
-│       ├── memory.py                      ← SQLite trade memory store
+│       ├── memory.py                      ← SQLite trade memory + IPO Watch state tables
 │       ├── trading_agent.py               ← order execution via Alpaca
 │       ├── reflection.py                  ← weekly lesson extraction
 │       ├── research.py                    ← Brave search + Claude research pipeline
+│       ├── tools.py                       ← yfinance tools (price, technicals, fundamentals)
 │       └── watchlist.py                   ← per-user watchlist management
 │
 ├── stock-copilot-web/                     ← React web UI
 │   ├── vite.config.ts                     ← proxy: /api → 127.0.0.1:8000 (dev)
+│   ├── public/staticwebapp.config.json    ← SWA client-side routing fallback
 │   ├── .env.production                    ← VITE_API_URL (Azure Container App URL)
 │   └── src/
 │       ├── App.tsx                        ← root, screen routing, plan state
-│       ├── lib/api.ts                     ← typed API client (sendMessage, approveDecision, etc.)
+│       ├── lib/api.ts                     ← typed API client (all endpoints)
 │       └── components/
 │           ├── ChatDrawer.tsx             ← slide-in chat with inline ApprovalCard
 │           ├── Dashboard.tsx              ← portfolio stats + positions table + alerts
 │           ├── TradeApprovalModal.tsx     ← rebalance plan review + approve/reject
-│           ├── SignalsFeed.tsx            ← live signal cards (RSI, EMA, momentum)
+│           ├── SignalsFeed.tsx            ← live signal cards from GET /signals (RSI/EMA/MACD)
+│           ├── IpoWatch.tsx              ← IPO Watch tab: signal cards, score bar, breakdown
 │           ├── Journal.tsx               ← trade journal + weekly digest
 │           ├── Settings.tsx              ← target allocation editor (donut chart)
 │           ├── NavBar.tsx                ← top nav
-│           └── ActionBar.tsx             ← quick-action chips
+│           └── ActionBar.tsx             ← quick-action chips (includes IPO Watch button)
 │
 ├── stock-copilot-agent/                   ← Microsoft Teams bot (TypeScript)
 │   ├── index.ts                           ← Restify server, port 3978
-│   └── teamsBot.ts                        ← Bot Framework message handler
+│   └── teamsBot.ts                        ← Bot Framework — handles watchlist alerts, IPO Watch cards, rebalance approvals
 │
 ├── mcp-servers/                           ← MCP tool connectivity layer
 │   ├── memory/                            ← trade memory MCP server
@@ -89,6 +139,9 @@ agents/
 │   ├── orchestrator/                      ← orchestrator MCP server
 │   ├── portfolio/                         ← Alpaca portfolio MCP server
 │   └── stock-data/                        ← price + technicals MCP server
+│
+├── config/
+│   └── target_allocation.yaml             ← per-ticker target portfolio weights
 │
 ├── scripts/                               ← one-time setup + dev utilities
 │   ├── register_agents.py                 ← register managed agents with Anthropic API
@@ -130,7 +183,7 @@ agents/
 │                                                                          │
 │  Intents: analyze · research · trade · portfolio · reflect · monitor    │
 │           watch · unwatch · watchlist · earnings · mtf · optimize       │
-│           digest · cancel · help                                         │
+│           digest · cancel · ipo_watch · help                            │
 └──────┬───────────────┬──────────────────┬───────────────────────────────┘
        │               │                  │
        ▼               ▼                  ▼
@@ -138,7 +191,6 @@ agents/
        │               │                  │
        │    ┌──────────┴──────────┐        │
        │    │  Phase 4 pipeline   │        │
-       │    │                     │        │
        │    │  session_           │        │
        │    │  orchestrator.py    │        │
        │    │  run_analysis_      │        │
@@ -221,13 +273,13 @@ stock-analysis-agent/.venv/bin/python scripts/register_agents.py
 | Sequential pipeline | vector context → analysis session → risk gate → execution |
 | Human-in-the-loop | Web UI ApprovalCard + Teams Adaptive Cards for ESCALATE |
 | Parallel fan-out/gather | run_parallel_watchlist_scan() — asyncio.gather() across N tickers |
-| Coordinator/dispatcher | router.py routes 15 intents to specialist handlers |
+| Coordinator/dispatcher | router.py routes 16 intents to specialist handlers |
 | Iterative refinement | Portfolio optimizer: propose → risk check → resize → execute |
 
 ### Model tiering (cost optimisation)
 
 ```python
-HAIKU  = "claude-haiku-4-5-20251001"   # intent classification, formatting (~10% of calls)
+HAIKU  = "claude-haiku-4-5-20251001"   # intent classification, formatting, IPO sentiment (~10% of calls)
 SONNET = "claude-sonnet-4-6"           # analysis, risk narrative, trade thesis (~90% of calls)
 ```
 Mixing models reduces cost 40–60% vs running Sonnet for everything.
@@ -295,7 +347,80 @@ RISK_DAILY_LOSS_HALT      default -0.02  (-2% portfolio loss halts all trading)
 
 ---
 
-## Web UI — key component details
+## IPO Watch subsystem
+
+### Overview
+Tracks pre-IPO candidates and scores them on a 0–100 composite signal:
+
+| Component | Max pts | Source |
+|---|---|---|
+| Proxy stock momentum | 20 | yfinance — weighted avg 5-day return of proxy tickers |
+| News sentiment | 10 | Brave snippets → Claude Haiku sentiment score |
+| S-1 filing detected | 40 | Brave keyword scan for S-1 / SEC filing language |
+| Roadshow detected | 30 | Brave keyword scan for roadshow / pricing / going-public |
+
+Signal labels: **ACT** ≥75 · **PREPARE** ≥55 · **WATCH** ≥30 · **RISK** <20 · **HOLD** otherwise
+
+### Profiles tracked
+
+| Ticker | Company | Est. valuation | Window | Proxy stocks |
+|---|---|---|---|---|
+| SPCE | SpaceX | $1.75T | Jun–Jul 2026 | SATS, RKLB, GOOGL |
+| OAII | OpenAI | $852B | Q4 2026 | MSFT, NVDA |
+| ANTHR | Anthropic | $380B | Q4 2026 | AMZN, GOOGL |
+
+### Key files
+- `ipo-watch/profiles.py` — `load_profile()`, `load_all_active_profiles()`, `list_profiles()`
+- `ipo-watch/signals.py` — `compute_signal(profile)`, `run_all_signals()`
+- `ipo-watch/alerts.py` — `dispatch_alert()`, dedup via `ipo_alerts_sent` table
+- `ipo-watch/scheduler_integration.py` — `run_ipo_watch_scan()`, `get_current_status()`
+
+### Dedup guard
+`ipo_alerts_sent` table has `UNIQUE(ticker, signal, channel)` — each threshold crossing fires exactly once per channel (web + Teams).
+
+### APScheduler job
+Every 4 hours, 24/7 (not market-hours gated — S-1 filings drop any time). Registered in `orchestrator/scheduler.py` as `_ipo_watch_job()`.
+
+### Path resolution
+`_AGENTS_ROOT` in `api.py` auto-detects via walking up parent directories until `orchestrator/` is found — handles both local layout (`agents/stock-analysis-agent/src/...`) and container layout (`/app/src/...`).
+
+### Chat intent
+`ipo_watch` intent responds to: "ipo watch", "ipo status", "ipo signals", "ipo tracker"
+Returns formatted signal dashboard with emoji badges and breakdown per profile.
+
+---
+
+## Signals feed (GET /signals)
+
+Live technical signals for the user's watchlist — no Claude calls, pure yfinance math.
+
+### Computation (per ticker, concurrent via ThreadPoolExecutor)
+1. `yf.Ticker(ticker).info` → price, prev close, company name
+2. `yf.Ticker(ticker).history(period="6mo")` → OHLCV
+3. Compute: RSI-14, EMA-12, EMA-26, MACD, SMA-50
+4. Derive:
+   - **Signal**: BUY SIGNAL (RSI<35 or MACD>0+price>SMA50) / SELL SIGNAL (RSI>65 or MACD<0+price<SMA50) / WATCH
+   - **EMA signal**: BULLISH (price>EMA26×1.005) / BEARISH (price<EMA26×0.995) / NEUTRAL
+   - **Momentum score** (0–10): base 5, adjusted by RSI deviation, MACD sign, price vs SMA50
+   - **Confidence** (0–100%): fraction of 4 indicators (RSI, MACD, SMA50, EMA) agreeing on direction
+
+### Fallback tickers
+If user watchlist is empty: TSLA · META · NVDA · AMZN · COIN · SQ
+
+### Response sorted by confidence descending — strongest signals first.
+
+---
+
+## Web UI screens
+
+| Screen | Key features |
+|---|---|
+| Dashboard | Portfolio value, positions table, P&L, proactive alerts feed |
+| Signals Feed | Live RSI/EMA/MACD cards from `GET /signals`; filter tabs (All/Buy/Sell/Watch); skeleton loading; refresh button |
+| Journal | Trade history, weekly digest, lessons |
+| Settings | Target allocation editor with donut chart |
+| IPO Watch | SPCE/OAII/ANTHR signal cards with score bar, breakdown pills, proxy % table, manual scan trigger |
+| Chat (drawer) | All 16 intents, inline approval cards, rebalance modal |
 
 ### ChatDrawer.tsx
 - Slide-in drawer (480px wide) with chat history + live context panel
@@ -309,16 +434,21 @@ RISK_DAILY_LOSS_HALT      default -0.02  (-2% portfolio loss halts all trading)
 ### api.ts — full API surface
 ```typescript
 api.portfolio()                              // GET /portfolio
+api.signals(user_id?)                        // GET /signals?user_id=...
 api.sendMessage(text, user_id?)              // POST /agent
 api.approveDecision(approval_id, decision)   // POST /agent/approve
 api.approveRebalance(plan_id, user_id?)      // POST /portfolio/rebalance/{id}/execute
 api.rejectRebalance(plan_id)                 // POST /portfolio/rebalance/{id}/reject
 api.health()                                 // GET /health
+api.ipoWatchStatus()                         // GET /ipo-watch/status
+api.ipoWatchRun(user_id?)                    // POST /ipo-watch/run
+api.ipoWatchProfiles()                       // GET /ipo-watch/profiles
 ```
 
 ### Vite proxy
 - Dev: `/api` → `http://127.0.0.1:8000` (set in `vite.config.ts`)
 - Production: `VITE_API_URL` in `.env.production` → Azure Container App URL
+- `VITE_API_KEY` baked into bundle at build time (GitHub Actions secret, not runtime SWA setting)
 - To override in dev: `VITE_API_TARGET=http://127.0.0.1:8000 npm run dev`
 
 ---
@@ -328,14 +458,33 @@ api.health()                                 // GET /health
 | Method | Path | Description |
 |---|---|---|
 | POST | /agent | Main entry — all chat messages, routes via router.py |
-| POST | /agent/approve | Approve or reject an ESCALATED trade (`decision: "approve"\|"reject"`) |
+| POST | /agent/approve | Approve or reject an ESCALATED trade |
+| GET | /agent/pending | List pending ESCALATED trade approvals |
 | GET | /portfolio | Positions, balance, P&L, open trades |
-| POST | /portfolio/rebalance | Generate rebalancing plan (returns plan_id) |
+| GET | /portfolio/allocation | Current target allocation config |
+| POST | /portfolio/optimize | Generate rebalancing plan (returns plan_id) |
 | POST | /portfolio/rebalance/{id}/execute | Execute an approved rebalancing plan |
 | POST | /portfolio/rebalance/{id}/reject | Reject / cancel a rebalancing plan |
+| GET | /signals | Live RSI/EMA/MACD signals for watchlist (or default tickers) |
 | GET | /health | Liveness probe |
-| GET | /health/deep | Deep health check (Alpaca + DB connectivity) |
-| GET | /agent/pending | List pending ESCALATED trade approvals |
+| GET | /health/deep | Deep health check (Anthropic API + Alpaca connectivity) |
+| POST | /monitor/watchlist/scan | On-demand watchlist scan for one user |
+| POST | /monitor/scan/run | Full watchlist scan across all users (queues alerts) |
+| GET | /monitor/scan/status | Scheduler state + next run time |
+| GET | /alerts/pending | Undelivered proactive alerts (polled by Teams bot) |
+| POST | /alerts/delivered/{id} | Mark alert delivered after Teams push |
+| POST | /alerts/store-ref | Upsert Teams ConversationReference for a user |
+| POST | /alerts/queue | Manually inject a test alert |
+| GET | /earnings/upcoming | Upcoming earnings for user's watchlist |
+| POST | /earnings/scan | On-demand earnings scan for specific tickers |
+| POST | /earnings/scan/run | Full queued earnings scan across all users |
+| POST | /journal/sync | Trigger immediate trade journal sync from Alpaca |
+| GET | /journal/digest | Build weekly digest on demand |
+| POST | /journal/reflect/run | Full weekly reflection + queue Teams card |
+| POST | /ipo-watch/run | Trigger immediate IPO Watch scan |
+| GET | /ipo-watch/status | Latest persisted signal state for all profiles |
+| GET | /ipo-watch/profiles | List all IPO profiles (active + inactive) |
+| GET | /openapi-custom-gpt.json | Minimal OpenAPI schema for Custom GPT Actions |
 
 ---
 
@@ -343,9 +492,9 @@ api.health()                                 // GET /health
 
 | Intent | Trigger phrases | Handler |
 |---|---|---|
-| analyze | "analyze AAPL", "technicals on NVDA" | Phase 2: vector context + run_analysis() |
+| analyze | "analyze AAPL", "technicals on NVDA" | vector context + run_analysis() |
 | research | "research MSFT", "buy/hold/sell on AMD" | Brave search + Claude thesis |
-| trade | "buy AAPL", "trade NVDA" | Phase 4: managed agent + risk gate + execution |
+| trade | "buy AAPL", "trade NVDA" | managed agent + risk gate + execution |
 | portfolio | "portfolio", "positions", "balance" | _format_portfolio() |
 | optimize | "optimize", "rebalance" | build_rebalance_plan() → approval |
 | cancel | "cancel all orders", "cancel orders" | cancel_all_orders() |
@@ -357,7 +506,19 @@ api.health()                                 // GET /health
 | earnings | "earnings NVDA" | earnings calendar + pre-earnings thesis |
 | mtf | "MTF AAPL", "multi-timeframe" | 15m + daily + weekly analysis |
 | digest | "digest", "weekly summary" | journal digest |
+| ipo_watch | "ipo watch", "ipo status", "ipo signals" | get_current_status() → signal dashboard |
 | help | "help", "what can you do" | capability list |
+
+---
+
+## APScheduler cron jobs (orchestrator/scheduler.py)
+
+| Job | Schedule | What it does |
+|---|---|---|
+| `watchlist_scan` | Every 15 min, market hours only (9:30–16:00 ET) | Scans all user watchlists, queues proactive alerts |
+| `_ipo_watch_job` | Every 4 hours, 24/7 | Runs full IPO Watch scan, queues Teams cards on threshold crossings |
+| `journal_reflect` | Monday 08:00 ET | Syncs closed trades + weekly Claude reflection + queues digest card |
+| `earnings_scan` | Daily 08:00 ET | Scans watchlist earnings calendar, queues Teams cards for 7-day window |
 
 ---
 
@@ -410,6 +571,20 @@ StockHistoricalDataClient(api_key, secret_key)         # bars, quotes
 ```
 
 Always use `feed="iex"` (free tier) unless `ALPACA_FEED=sip` is set.
+
+---
+
+## yfinance tools (stock_agent/tools.py)
+
+```python
+get_stock_info(ticker)              # company name, sector, market cap, description
+get_current_price(ticker)           # price, change%, day high/low, volume
+get_price_history(ticker, period)   # OHLCV summary stats for period
+get_technical_indicators(ticker)    # SMA20/50/200, EMA12/26, MACD, RSI-14, Bollinger Bands
+get_fundamentals(ticker)            # P/E, P/B, EV/EBITDA, margins, D/E, analyst targets
+```
+
+Used directly by the analysis agent (tool-use loop) and by `GET /signals` (concurrent ThreadPoolExecutor).
 
 ---
 
@@ -474,7 +649,7 @@ ANTHROPIC_API_KEY          # required for all Claude calls
 ALPACA_API_KEY             # Alpaca Markets key ID
 ALPACA_API_SECRET          # Alpaca Markets secret
 ALPACA_BASE_URL            # https://paper-api.alpaca.markets (default)
-BRAVE_API_KEY              # Brave Search API
+BRAVE_API_KEY              # Brave Search API (news, research, IPO signals)
 
 # Bot
 BOT_ID                     # Azure Bot app ID
@@ -483,13 +658,14 @@ BOT_TENANT_ID              # Azure tenant ID
 
 # API security
 AGENT_API_KEY              # X-API-Key header (leave empty for open local dev)
+                           # VITE_API_KEY must match — baked into web UI at build time
 
 # Database
 DB_PATH                    # SQLite path (default: iCloud/Projects/data/trading_memory.db)
                            # Local dev: /path/to/agents/data/trading_memory.db
 
 # Vector store
-VECTOR_BACKEND             # "chroma" (local dev) or "azure" (production)
+VECTOR_BACKEND             # "chroma" (local dev) or "azure" (production, NOT YET BUILT)
 AZURE_SEARCH_ENDPOINT      # https://your-service.search.windows.net
 AZURE_SEARCH_KEY           # Azure AI Search admin key
 AZURE_SEARCH_INDEX         # stock-copilot
@@ -540,6 +716,9 @@ Run these commands in the web UI or Teams bot in order:
    → click Approve → verifies multi-trade execution
 6. `cancel all orders` — cancels open orders before retry
 7. `MTF AAPL` — verifies multi-timeframe analysis (15m / daily / weekly)
+8. `ipo watch` — verifies IPO Watch signal dashboard in chat
+9. Signals Feed tab → verify live prices (not hardcoded mock values)
+10. IPO Watch tab → verify score cards load; click "Run Scan" to trigger manual scan
 
 ---
 
@@ -552,13 +731,18 @@ Run these commands in the web UI or Teams bot in order:
 | Managed agent registration | orchestrator/managed_agents.py |
 | Session pipeline | orchestrator/session_orchestrator.py |
 | Intent routing | orchestrator/router.py |
+| Scheduled jobs | orchestrator/scheduler.py |
 | Alpaca API calls | stock-trading-skill/references/alpaca-api.md |
+| yfinance tools | stock-analysis-agent/src/stock_agent/tools.py |
 | Web UI chat + approval | stock-copilot-web/src/components/ChatDrawer.tsx |
 | Web UI API client | stock-copilot-web/src/lib/api.ts |
 | Teams bot / Adaptive Cards | stock-copilot-agent/teamsBot.ts |
 | FastAPI endpoints | stock-analysis-agent/src/stock_agent/api.py |
 | Portfolio optimizer | orchestrator/portfolio_optimizer.py |
 | Trade journal | orchestrator/journal_agent.py |
+| IPO Watch signals | ipo-watch/signals.py |
+| IPO Watch profiles | ipo-watch/ipo_profiles/*.json |
+| SQLite schema | stock-analysis-agent/src/stock_agent/memory.py |
 
 ---
 
@@ -572,30 +756,6 @@ Run these commands in the web UI or Teams bot in order:
 - SQLite and ChromaDB are local-dev only — gitignored
 - `.agent_registry.json` is gitignored — re-run `register_agents.py` per environment
 - Never use `alpaca-trade-api` (deprecated) — always `alpaca-py`
-- Model tiering: Haiku for routing/classification, Sonnet for analysis/reasoning
-
----
-
-## Planned capabilities (not yet built)
-
-1. **Azure AI Search adapter** in `vector_store.py`
-   - Triggered by `VECTOR_BACKEND=azure`
-   - Same public interface as ChromaDB implementation
-   - Required before production vector store is persistent across deployments
-
-2. **Watchlist monitor agent** (scheduled, not user-initiated)
-   - Pattern: parallel fan-out/gather
-   - Polls N tickers via `asyncio.gather()`, filters by scoring threshold
-   - Pushes proactive Teams/web alerts
-
-3. **Earnings intelligence agent**
-   - Fetches earnings calendar → Brave research → thesis generation
-   - Brave API key already configured
-
-4. **Persistent volume for SQLite** in Azure Container Apps
-   - Mount Azure Files share to `/data/`
-   - Set `DB_PATH=/data/trading_memory.db` in Container App env
-
-5. **Startup probe** for Container App health gate
-   - Currently polls revision ready state (coarse)
-   - TODO: add `/health/deep` as startup probe in Container App definition
+- Model tiering: Haiku for routing/classification/sentiment, Sonnet for analysis/reasoning
+- `VITE_API_KEY` must be set as a GitHub Actions secret (baked at Vite build time, not SWA runtime setting)
+- `_AGENTS_ROOT` in api.py auto-detects by walking up until `orchestrator/` directory is found — handles both local and container layouts
