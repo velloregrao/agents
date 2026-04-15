@@ -19,7 +19,23 @@ jobs:
         with:
           submodules: true
 
-      - name: Build and deploy to Azure Static Web Apps
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: stock-copilot-web/package-lock.json
+
+      - name: Install and build
+        working-directory: stock-copilot-web
+        run: |
+          npm ci
+          npx vite build
+        env:
+          VITE_API_URL: https://python-api.salmonsky-548aa144.eastus.azurecontainerapps.io
+          VITE_API_KEY: ${{ secrets.VITE_API_KEY }}
+
+      - name: Deploy to Azure Static Web Apps
         uses: Azure/static-web-apps-deploy@v1
         with:
           azure_static_web_apps_api_token: ${{ secrets.AZURE_STATIC_WEB_APPS_API_TOKEN }}
@@ -27,5 +43,4 @@ jobs:
           action:                           upload
           app_location:                     stock-copilot-web
           output_location:                  dist
-        env:
-          VITE_API_KEY: ${{ secrets.VITE_API_KEY }}
+          skip_app_build:                   true
