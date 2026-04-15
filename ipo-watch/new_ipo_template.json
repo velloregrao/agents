@@ -1,0 +1,39 @@
+{
+  "ticker": "TICKER",
+  "company_name": "Company Name",
+  "description": "One-sentence description of the company and what it does.",
+  "estimated_valuation_usd": 0,
+  "estimated_listing_window": "Q? 20XX",
+  "listing_exchange": "NASDAQ",
+  "active": true,
+  "proxy_stocks": ["TICK1", "TICK2"],
+  "proxy_rationale": {
+    "TICK1": "Why this stock moves with the IPO candidate",
+    "TICK2": "Why this stock moves with the IPO candidate"
+  },
+  "key_signals": [
+    "S-1 filing with SEC",
+    "IPO roadshow announcement",
+    "Milestone 1",
+    "Milestone 2"
+  ],
+  "signal_weights": {
+    "s1_filed": 40,
+    "roadshow_announced": 30,
+    "proxy_momentum": 20,
+    "news_sentiment": 10
+  },
+  "alert_thresholds": {
+    "WATCH": 30,
+    "PREPARE": 55,
+    "ACT": 75,
+    "RISK": 20
+  },
+  "brave_search_queries": [
+    "COMPANY IPO 2026",
+    "COMPANY S-1 SEC filing",
+    "COMPANY public offering date",
+    "COMPANY valuation IPO"
+  ],
+  "notes": "Any special considerations, corporate structure notes, or watch items."
+}

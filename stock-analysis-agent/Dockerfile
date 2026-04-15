@@ -15,6 +15,10 @@ COPY stock-analysis-agent/src/ src/
 COPY orchestrator/ orchestrator/
 COPY config/ config/
 
+# ipo-watch/ is imported by orchestrator/scheduler.py and api.py at runtime.
+# Profiles (JSON) and signal/alert modules must be present in the image.
+COPY ipo-watch/ ipo-watch/
+
 # Install all dependencies (includes fastapi + uvicorn + alpaca-py)
 RUN uv pip install --system -e .
 

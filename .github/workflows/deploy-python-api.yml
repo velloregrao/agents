@@ -6,6 +6,7 @@ on:
     paths:
       - "stock-analysis-agent/**"
       - "orchestrator/**"
+      - "ipo-watch/**"
       - ".github/workflows/deploy-python-api.yml"
 
 jobs:

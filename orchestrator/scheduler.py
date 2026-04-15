@@ -33,8 +33,9 @@ sys.path.insert(0, str(_AGENTS_ROOT / "stock-analysis-agent" / "src"))
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
-_ET                    = ZoneInfo("America/New_York")
-SCAN_INTERVAL_MINUTES  = 15
+_ET                       = ZoneInfo("America/New_York")
+SCAN_INTERVAL_MINUTES     = 15
+IPO_WATCH_INTERVAL_HOURS  = 4   # IPO signals checked every 4 h, 24/7
 _MARKET_OPEN_H, _MARKET_OPEN_M   = 9, 30
 _MARKET_CLOSE_H, _MARKET_CLOSE_M = 16, 0
 
@@ -142,6 +143,28 @@ def _journal_sync_job() -> None:
         print(f"[scheduler] journal sync error: {exc}", file=sys.stderr, flush=True)
 
 
+def _ipo_watch_job() -> None:
+    """
+    IPO Watch scan — fires every IPO_WATCH_INTERVAL_HOURS, 24/7 (no market-hours
+    guard: S-1 filings and news land any time, proxy momentum from recent closes).
+    """
+    _ipo_root = str(_AGENTS_ROOT / "ipo-watch")
+    if _ipo_root not in sys.path:
+        sys.path.insert(0, _ipo_root)
+
+    try:
+        from scheduler_integration import run_ipo_watch_scan  # type: ignore
+        result = run_ipo_watch_scan()
+        print(
+            f"[scheduler] ipo-watch complete — "
+            f"{result['profiles_checked']} profile(s), "
+            f"{sum(1 for d in result['alerts_dispatched'] if len(d['dispatched']) > 1)} alert(s)",
+            flush=True,
+        )
+    except Exception as exc:
+        print(f"[scheduler] ipo-watch error: {exc}", file=sys.stderr, flush=True)
+
+
 def _weekly_reflection_job() -> None:
     """
     Weekly reflection cron — runs every Monday at 08:00 ET.
@@ -210,11 +233,18 @@ def start() -> None:
         replace_existing=True,
         max_instances=1,
     )
+    _SCHEDULER.add_job(
+        _ipo_watch_job,
+        trigger=IntervalTrigger(hours=IPO_WATCH_INTERVAL_HOURS, timezone=_ET),
+        id="ipo_watch_scan",
+        name="IPO Watch Signal Scan",
+        replace_existing=True,
+        max_instances=1,        # never overlap — Brave + Claude calls per profile
+    )
     _SCHEDULER.start()
     print(
-        f"[scheduler] started — scan every {SCAN_INTERVAL_MINUTES} min "
-        f"(market hours only: Mon–Fri {_MARKET_OPEN_H:02d}:{_MARKET_OPEN_M:02d}–"
-        f"{_MARKET_CLOSE_H:02d}:{_MARKET_CLOSE_M:02d} ET)",
+        f"[scheduler] started — watchlist every {SCAN_INTERVAL_MINUTES} min (market hours), "
+        f"ipo-watch every {IPO_WATCH_INTERVAL_HOURS} h (24/7)",
         flush=True,
     )
 

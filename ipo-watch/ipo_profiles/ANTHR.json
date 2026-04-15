@@ -1,0 +1,41 @@
+{
+  "ticker": "ANTHR",
+  "company_name": "Anthropic",
+  "description": "AI safety company and creator of Claude AI. Major investors include Amazon ($4B+), Google ($2B+), Spark Capital, and others.",
+  "estimated_valuation_usd": 380000000000,
+  "estimated_listing_window": "Q4 2026",
+  "listing_exchange": "NASDAQ",
+  "active": true,
+  "proxy_stocks": ["AMZN", "GOOGL"],
+  "proxy_rationale": {
+    "AMZN": "Amazon invested $4B+ in Anthropic; Claude powers Amazon Bedrock — primary proxy",
+    "GOOGL": "Google invested $2B+; Anthropic team originated from Google Brain/DeepMind lineage"
+  },
+  "key_signals": [
+    "S-1 filing with SEC",
+    "IPO roadshow announcement",
+    "Claude API revenue milestone (>$1B ARR)",
+    "Amazon Bedrock Claude usage milestone",
+    "Enterprise customer count milestone (>10K)"
+  ],
+  "signal_weights": {
+    "s1_filed": 40,
+    "roadshow_announced": 30,
+    "proxy_momentum": 20,
+    "news_sentiment": 10
+  },
+  "alert_thresholds": {
+    "WATCH": 30,
+    "PREPARE": 55,
+    "ACT": 75,
+    "RISK": 20
+  },
+  "brave_search_queries": [
+    "Anthropic IPO 2026",
+    "Anthropic S-1 SEC filing",
+    "Anthropic public offering date",
+    "Anthropic valuation IPO",
+    "Claude AI IPO Anthropic listing"
+  ],
+  "notes": "Anthropic is incorporated as a public benefit corporation (PBC). Conversion or dual-class structure likely before IPO. Amazon is anchor investor and distribution partner via AWS."
+}

@@ -1093,6 +1093,66 @@ def journal_reflect_run():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ── IPO Watch endpoints ───────────────────────────────────────────────────────
+
+@app.post("/ipo-watch/run")
+def ipo_watch_run(user_id: str = "ipo-watch"):
+    """
+    Trigger an immediate IPO Watch scan for all active profiles.
+
+    Mirrors what the every-4-hours cron does. Useful for testing outside
+    the scheduled window or forcing a refresh after adding a new profile.
+
+    Returns per-profile signal results and alert dispatch summaries.
+    """
+    _ipo_root = str(_AGENTS_ROOT / "ipo-watch")
+    if _ipo_root not in sys.path:
+        sys.path.insert(0, _ipo_root)
+
+    try:
+        from scheduler_integration import run_ipo_watch_scan  # type: ignore
+        result = run_ipo_watch_scan(user_id=user_id)
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/ipo-watch/status")
+def ipo_watch_status():
+    """
+    Return the latest persisted signal state for all active IPO Watch profiles.
+
+    No API calls — reads from ipo_watch_state SQLite table only.
+    Safe to call frequently from a dashboard.
+    """
+    _ipo_root = str(_AGENTS_ROOT / "ipo-watch")
+    if _ipo_root not in sys.path:
+        sys.path.insert(0, _ipo_root)
+
+    try:
+        from scheduler_integration import get_current_status  # type: ignore
+        rows = get_current_status()
+        return {"profiles": rows, "count": len(rows)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/ipo-watch/profiles")
+def ipo_watch_profiles():
+    """
+    List all IPO Watch profiles (active and inactive) with summary metadata.
+    """
+    _ipo_root = str(_AGENTS_ROOT / "ipo-watch")
+    if _ipo_root not in sys.path:
+        sys.path.insert(0, _ipo_root)
+
+    try:
+        from profiles import list_profiles  # type: ignore
+        return {"profiles": list_profiles()}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 # ── Local dev entry point ─────────────────────────────────────────────────────
 
 if __name__ == "__main__":

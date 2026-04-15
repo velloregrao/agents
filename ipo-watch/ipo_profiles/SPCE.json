@@ -1,0 +1,42 @@
+{
+  "ticker": "SPCE",
+  "company_name": "SpaceX",
+  "description": "Private commercial space exploration company founded by Elon Musk. Operates Falcon 9, Falcon Heavy, Starship, and Starlink satellite internet.",
+  "estimated_valuation_usd": 1750000000000,
+  "estimated_listing_window": "Jun-Jul 2026",
+  "listing_exchange": "NASDAQ",
+  "active": true,
+  "proxy_stocks": ["SATS", "RKLB", "GOOGL"],
+  "proxy_rationale": {
+    "SATS": "EchoStar/satellite services — moves on Starlink competition news",
+    "RKLB": "Rocket Lab — small-sat launch competitor; sentiment barometer for launch market",
+    "GOOGL": "Google investment partner in SpaceX; Starlink broadband competes with Google Fiber"
+  },
+  "key_signals": [
+    "S-1 filing with SEC",
+    "IPO roadshow announcement",
+    "Starlink subscriber milestone (>50M)",
+    "Starship orbital mission success",
+    "NASA Artemis contract milestones"
+  ],
+  "signal_weights": {
+    "s1_filed": 40,
+    "roadshow_announced": 30,
+    "proxy_momentum": 20,
+    "news_sentiment": 10
+  },
+  "alert_thresholds": {
+    "WATCH": 30,
+    "PREPARE": 55,
+    "ACT": 75,
+    "RISK": 20
+  },
+  "brave_search_queries": [
+    "SpaceX IPO 2026",
+    "SpaceX S-1 SEC filing",
+    "Starlink IPO date",
+    "SpaceX valuation 2026",
+    "SpaceX public offering"
+  ],
+  "notes": "Most anticipated IPO of the decade. Starlink subsidiary may IPO separately before SpaceX parent. Watch for Starlink-only S-1 as an earlier signal."
+}

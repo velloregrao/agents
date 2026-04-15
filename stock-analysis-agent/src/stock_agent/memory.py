@@ -100,6 +100,30 @@ def initialize_db():
         except Exception:
             pass  # column already exists — safe to ignore
 
+    # IPO Watch — dedup guard for alert notifications
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS ipo_alerts_sent (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ticker TEXT NOT NULL,
+            signal TEXT NOT NULL,
+            channel TEXT NOT NULL,
+            sent_at TEXT DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(ticker, signal, channel)
+        )
+    """)
+
+    # IPO Watch — per-ticker persistent state (last score, last analysis, etc.)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS ipo_watch_state (
+            ticker TEXT PRIMARY KEY,
+            last_score REAL,
+            last_signal TEXT,
+            last_analysis TEXT,
+            last_checked TEXT,
+            updated_at TEXT DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+
     conn.commit()
     conn.close()
     print(f"Memory store initialized at {DB_PATH}")
@@ -476,6 +500,79 @@ def get_token_usage_summary(days: int = 30) -> dict:
         }
     except Exception as e:
         return {"error": str(e)}
+
+
+# ---------------------------------------------------------------------------
+# IPO Watch helpers
+# ---------------------------------------------------------------------------
+
+def already_alerted(ticker: str, signal: str, channel: str) -> bool:
+    """Return True if this (ticker, signal, channel) combo was already sent."""
+    try:
+        conn = _get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT 1 FROM ipo_alerts_sent WHERE ticker=? AND signal=? AND channel=?",
+            (ticker.upper(), signal, channel),
+        )
+        found = cursor.fetchone() is not None
+        conn.close()
+        return found
+    except Exception:
+        return False
+
+
+def record_alert(ticker: str, signal: str, channel: str) -> None:
+    """Mark (ticker, signal, channel) as sent so we don't spam."""
+    try:
+        conn = _get_connection()
+        conn.execute(
+            "INSERT OR IGNORE INTO ipo_alerts_sent (ticker, signal, channel) VALUES (?,?,?)",
+            (ticker.upper(), signal, channel),
+        )
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass
+
+
+def get_ipo_state(ticker: str) -> dict:
+    """Return the latest persisted state for a watched ticker, or {}."""
+    try:
+        conn = _get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT * FROM ipo_watch_state WHERE ticker=?",
+            (ticker.upper(),),
+        )
+        row = cursor.fetchone()
+        conn.close()
+        return dict(row) if row else {}
+    except Exception:
+        return {}
+
+
+def set_ipo_state(ticker: str, score: float, signal: str, analysis: str) -> None:
+    """Upsert the latest analysis state for a watched ticker."""
+    try:
+        conn = _get_connection()
+        conn.execute(
+            """
+            INSERT INTO ipo_watch_state (ticker, last_score, last_signal, last_analysis, last_checked, updated_at)
+            VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(ticker) DO UPDATE SET
+                last_score    = excluded.last_score,
+                last_signal   = excluded.last_signal,
+                last_analysis = excluded.last_analysis,
+                last_checked  = excluded.last_checked,
+                updated_at    = CURRENT_TIMESTAMP
+            """,
+            (ticker.upper(), score, signal, analysis, datetime.now().isoformat()),
+        )
+        conn.commit()
+        conn.close()
+    except Exception:
+        pass
 
 
 if __name__ == "__main__":

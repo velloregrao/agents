@@ -512,6 +512,118 @@ function buildJournalCard(alert: PendingAlert) {
   });
 }
 
+// ── IPO Watch payload (mirrors alerts.py _queue_ipo_alert payload) ───────────
+
+interface IpoWatchBreakdown {
+  proxy_momentum:    number;
+  proxy_changes:     Record<string, number | null>;
+  news_sentiment:    number;
+  sentiment_label:   string;
+  s1_score:          number;
+  s1_detected:       boolean;
+  roadshow_score:    number;
+  roadshow_detected: boolean;
+  is_negative:       boolean;
+}
+
+interface IpoWatchPayload {
+  ticker:       string;
+  company_name: string;
+  score:        number;
+  signal:       string;
+  breakdown:    IpoWatchBreakdown;
+  checked_at:   string;
+  card?:        unknown;  // pre-built Adaptive Card from Python (optional)
+}
+
+function buildIpoWatchCard(alert: PendingAlert) {
+  const p      = alert.signal as IpoWatchPayload;
+  const { id } = alert;
+  const bd     = p.breakdown ?? {} as IpoWatchBreakdown;
+
+  const signalEmoji: Record<string, string> = {
+    ACT: "🚀", PREPARE: "📋", WATCH: "👀", RISK: "⚠️", HOLD: "⏸️",
+  };
+  const signalColor: Record<string, string> = {
+    ACT: "Good", PREPARE: "Accent", WATCH: "Warning", RISK: "Attention", HOLD: "Default",
+  };
+  const signalDesc: Record<string, string> = {
+    ACT:     "IPO appears imminent — consider deploying a position in proxy stocks.",
+    PREPARE: "Strong IPO signals detected — start building a watchlist and sizing plan.",
+    WATCH:   "Early IPO indicators emerging — begin monitoring proxy stock momentum.",
+    RISK:    "IPO thesis weakened — negative signals detected, reassess exposure.",
+    HOLD:    "No new material developments — current monitoring stance unchanged.",
+  };
+
+  const emoji = signalEmoji[p.signal] ?? "📊";
+  const color = signalColor[p.signal] ?? "Default";
+  const desc  = signalDesc[p.signal]  ?? "";
+
+  // Build proxy rows
+  const proxyFacts = Object.entries(bd.proxy_changes ?? {}).map(([t, pct]) => ({
+    title: t,
+    value: pct != null
+      ? `${pct >= 0 ? "▲" : "▼"} ${Math.abs(pct).toFixed(2)}%`
+      : "N/A",
+  }));
+
+  return CardFactory.adaptiveCard({
+    type:    "AdaptiveCard",
+    version: "1.4",
+    body: [
+      {
+        type:   "TextBlock",
+        text:   `${emoji} IPO Watch — ${p.signal}: ${p.company_name} (${p.ticker})`,
+        weight: "Bolder",
+        size:   "Large",
+        color,
+        wrap:   true,
+      },
+      {
+        type:   "TextBlock",
+        text:   desc,
+        wrap:   true,
+        spacing: "Small",
+        isSubtle: true,
+      },
+      {
+        type:  "FactSet",
+        facts: [
+          { title: "Composite Score",  value: `${p.score.toFixed(1)} / 100` },
+          { title: "Proxy Momentum",   value: `${(bd.proxy_momentum ?? 0).toFixed(1)} pts` },
+          { title: "News Sentiment",   value: `${(bd.sentiment_label ?? "N/A").charAt(0).toUpperCase() + (bd.sentiment_label ?? "").slice(1)} (${(bd.news_sentiment ?? 0).toFixed(1)} pts)` },
+          { title: "S-1 Detected",     value: bd.s1_detected     ? "Yes ✓" : "No" },
+          { title: "Roadshow",         value: bd.roadshow_detected ? "Yes ✓" : "No" },
+          { title: "Checked",          value: (p.checked_at ?? "").slice(0, 16).replace("T", " ") + " UTC" },
+        ],
+        spacing: "Medium",
+      },
+      ...(proxyFacts.length > 0 ? [
+        {
+          type:    "TextBlock",
+          text:    "Proxy Stock Performance (1 week)",
+          weight:  "Bolder",
+          spacing: "Medium",
+        },
+        { type: "FactSet", facts: proxyFacts },
+      ] : []),
+    ],
+    actions: [
+      {
+        type:  "Action.Submit",
+        title: "📊 Full Analysis",
+        style: "positive",
+        data:  { action: "analyze_ticker", ticker: p.ticker, alert_id: id },
+      },
+      {
+        type: "Action.Submit",
+        title: "✓ Dismiss",
+        data: { action: "dismiss_alert", alert_id: id },
+      },
+    ],
+  });
+}
+
 function buildRebalanceCard(alert: PendingAlert) {
   const p      = alert.signal as RebalancePayload;
   const { id } = alert;
@@ -864,6 +976,8 @@ export class TeamsBot extends TeamsActivityHandler {
               ? buildRebalanceCard(alert)
               : alert.alert_type === "journal"
               ? buildJournalCard(alert)
+              : alert.alert_type === "ipo_watch"
+              ? buildIpoWatchCard(alert)
               : buildSignalCard(alert);
             await proactiveCtx.sendActivity(MessageFactory.attachment(card));
           },

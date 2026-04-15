@@ -1,0 +1,41 @@
+{
+  "ticker": "OAII",
+  "company_name": "OpenAI",
+  "description": "AI research company and creator of ChatGPT, GPT-4, DALL-E, and Sora. Microsoft is a major strategic investor ($13B+).",
+  "estimated_valuation_usd": 852000000000,
+  "estimated_listing_window": "Q4 2026",
+  "listing_exchange": "NASDAQ",
+  "active": true,
+  "proxy_stocks": ["MSFT", "NVDA"],
+  "proxy_rationale": {
+    "MSFT": "Microsoft holds $13B+ stake and integrates OpenAI into Azure/Copilot — primary proxy",
+    "NVDA": "GPU supplier for AI training; NVIDIA revenue tied to AI model training demand"
+  },
+  "key_signals": [
+    "S-1 filing with SEC",
+    "IPO roadshow announcement",
+    "Conversion from capped-profit to for-profit structure completion",
+    "ChatGPT revenue milestone (>$10B ARR)",
+    "Microsoft partnership expansion or renegotiation"
+  ],
+  "signal_weights": {
+    "s1_filed": 40,
+    "roadshow_announced": 30,
+    "proxy_momentum": 20,
+    "news_sentiment": 10
+  },
+  "alert_thresholds": {
+    "WATCH": 30,
+    "PREPARE": 55,
+    "ACT": 75,
+    "RISK": 20
+  },
+  "brave_search_queries": [
+    "OpenAI IPO 2026",
+    "OpenAI S-1 SEC filing",
+    "OpenAI public offering date",
+    "OpenAI valuation IPO",
+    "OpenAI for-profit conversion IPO"
+  ],
+  "notes": "Corporate restructuring from capped-profit LLC to for-profit C-corp required before IPO. Watch for Delaware incorporation and SEC registration statements."
+}

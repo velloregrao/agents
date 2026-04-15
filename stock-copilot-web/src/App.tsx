@@ -7,9 +7,10 @@ import { TradeApprovalModal } from './components/TradeApprovalModal'
 import { SignalsFeed }        from './components/SignalsFeed'
 import { Journal }            from './components/Journal'
 import { Settings }           from './components/Settings'
+import { IpoWatch }           from './components/IpoWatch'
 import { api, type Balance }  from './lib/api'
 
-type Screen = 'dashboard' | 'chat' | 'signals' | 'journal' | 'settings'
+type Screen = 'dashboard' | 'chat' | 'signals' | 'journal' | 'settings' | 'ipo-watch'
 
 export default function App() {
   const [screen, setScreen]         = useState<Screen>('dashboard')
@@ -55,6 +56,9 @@ export default function App() {
           )}
           {screen === 'settings' && (
             <Settings />
+          )}
+          {screen === 'ipo-watch' && (
+            <IpoWatch onCommand={handleCommand} />
           )}
         </div>
 

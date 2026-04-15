@@ -1,4 +1,4 @@
-type Screen = 'dashboard' | 'chat' | 'signals' | 'journal' | 'settings'
+type Screen = 'dashboard' | 'chat' | 'signals' | 'journal' | 'settings' | 'ipo-watch'
 
 interface Props {
   onCommand: (cmd: string) => void
@@ -12,7 +12,8 @@ export function ActionBar({ onCommand, setScreen }: Props) {
     { label: 'Portfolio', cmd: 'Portfolio',    screen: 'dashboard'as Screen },
     { label: 'Optimize',  cmd: 'Optimize',     screen: 'chat'     as Screen },
     { label: 'Digest',    cmd: 'Digest',       screen: 'journal'  as Screen },
-    { label: 'Signals',   cmd: '',             screen: 'signals'  as Screen },
+    { label: 'Signals',   cmd: '',             screen: 'signals'   as Screen },
+    { label: 'IPO Watch', cmd: '',             screen: 'ipo-watch' as Screen },
   ]
 
   return (
