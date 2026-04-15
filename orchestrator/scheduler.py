@@ -35,7 +35,7 @@ sys.path.insert(0, str(_AGENTS_ROOT / "stock-analysis-agent" / "src"))
 
 _ET                       = ZoneInfo("America/New_York")
 SCAN_INTERVAL_MINUTES     = 15
-IPO_WATCH_INTERVAL_HOURS  = 4   # IPO signals checked every 4 h, 24/7
+IPO_WATCH_INTERVAL_HOURS  = 4   # IPO Watch signals checked every 4 h, 24/7
 _MARKET_OPEN_H, _MARKET_OPEN_M   = 9, 30
 _MARKET_CLOSE_H, _MARKET_CLOSE_M = 16, 0
 
