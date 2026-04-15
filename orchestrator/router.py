@@ -62,7 +62,7 @@ _VALID_INTENTS = frozenset({
     "analyze", "research", "trade", "portfolio",
     "reflect", "monitor", "help", "unknown",
     "watch", "unwatch", "watchlist", "earnings", "mtf", "optimize", "digest",
-    "cancel",
+    "cancel", "ipo_watch",
 })
 
 _CLASSIFIER_SYSTEM = """You are an intent classifier for a stock trading assistant.
@@ -84,6 +84,7 @@ Intents:
   optimize  → user wants to rebalance or optimize their portfolio against a target allocation
   digest    → user wants the weekly trading digest, journal summary, or lessons learned
   cancel    → user wants to cancel open orders (all orders, or a specific order)
+  ipo_watch → user wants IPO Watch signals, scores, or status for tracked IPO candidates (SpaceX/SPCE, OpenAI/OAII, Anthropic/ANTHR)
   help      → greeting, or asking what the bot can do
   unknown   → message does not match any category
 
@@ -152,6 +153,7 @@ _SKIP_WORDS = frozenset({
     "WATCHLIST", "REMOVE", "ADD", "STOP", "EARNINGS", "WHEN", "REPORT",
     "UPCOMING", "REPORTS", "DOES", "MTF", "MULTI", "TIMEFRAME",
     "OPTIMIZE", "REBALANCE", "ALLOCATION", "DIGEST", "JOURNAL", "WEEKLY",
+    "IPO", "STATUS", "SIGNAL", "SIGNALS", "TRACKER", "CANDIDATES",
 })
 
 
@@ -163,6 +165,8 @@ def _parse_intent_fallback(text: str) -> tuple[str, list[str]]:
 
     if re.match(r"^(hi|hello|hey|help)$", text.strip(), re.IGNORECASE):
         return "help", []
+    if re.search(r"ipo\s*(watch|status|signal|tracker|candidates?)", text, re.IGNORECASE):
+        return "ipo_watch", []
     if re.search(r"monitor|check\s+positions|review\s+positions", text, re.IGNORECASE):
         return "monitor", []
     if re.search(r"portfolio|positions|holdings", text, re.IGNORECASE):
@@ -280,7 +284,8 @@ def _dispatch_full(
             "- **Watch AAPL NVDA** — Add tickers to proactive watchlist\n"
             "- **Earnings AAPL** — Pre-earnings thesis and estimates\n"
             "- **MTF AAPL** — Multi-timeframe analysis (15m + daily + weekly)\n"
-            "- **Optimize** — Generate a portfolio rebalancing plan (requires approval)\n\n"
+            "- **Optimize** — Generate a portfolio rebalancing plan (requires approval)\n"
+            "- **IPO Watch** — Show signal scores for tracked IPO candidates (SpaceX, OpenAI, Anthropic)\n\n"
             "*Powered by Claude + Alpaca paper trading*"
         ), False, None
 
@@ -567,6 +572,69 @@ def _dispatch_full(
 
         requires_approval = len(escalated) > 0
         return "\n\n".join(lines), requires_approval, escalation_context
+
+    if intent == "ipo_watch":
+        _ipo_root = str(_AGENTS_ROOT / "ipo-watch")
+        if _ipo_root not in sys.path:
+            sys.path.insert(0, _ipo_root)
+        try:
+            from scheduler_integration import get_current_status
+            rows = get_current_status()
+            if not rows:
+                return (
+                    "📋 **No active IPO profiles found.**\n\n"
+                    "IPO Watch is monitoring: SPCE (SpaceX), OAII (OpenAI), ANTHR (Anthropic)\n"
+                    "Scans run every 4 hours. Try the **IPO Watch** tab to trigger a manual scan."
+                ), False, None
+
+            SIGNAL_EMOJI = {
+                "ACT":     "🟢",
+                "PREPARE": "🔵",
+                "WATCH":   "🟡",
+                "RISK":    "🔴",
+                "HOLD":    "⚪",
+            }
+
+            lines = ["## 🚀 IPO Watch — Signal Dashboard\n"]
+            for r in rows:
+                score    = r.get("last_score")
+                signal   = r.get("last_signal") or "HOLD"
+                emoji    = SIGNAL_EMOJI.get(signal, "⚪")
+                score_str = f"{score:.1f}" if score is not None else "N/A"
+                checked  = str(r.get("last_checked") or "never")[:16]
+                window   = r.get("estimated_listing_window") or "TBD"
+
+                lines += [
+                    f"### {emoji} {r['ticker']} — {r.get('company_name', '')}",
+                    f"**Signal:** {signal}  |  **Score:** {score_str}/100  |  **Window:** {window}",
+                    f"*Last checked: {checked} UTC*",
+                ]
+
+                bd = r.get("breakdown")
+                if bd:
+                    proxy   = bd.get("proxy_momentum", 0)
+                    sent    = bd.get("news_sentiment", 0)
+                    s1      = bd.get("s1_score", 0)
+                    road    = bd.get("roadshow_score", 0)
+                    s_label = bd.get("sentiment_label", "")
+                    lines.append(
+                        f"> Proxy: {proxy:.0f}/20 · Sentiment: {sent:.0f}/10 ({s_label})"
+                        f" · S-1: {s1:.0f}/40 · Roadshow: {road:.0f}/30"
+                    )
+                else:
+                    lines.append("> *No scan data yet — run a manual scan via the IPO Watch tab.*")
+
+                lines.append("")
+
+            lines += [
+                "---",
+                "*Signals refresh every 4 hours. ACT ≥75 · PREPARE ≥55 · WATCH ≥30 · RISK <20*",
+                "*Use the **IPO Watch** tab or POST /ipo-watch/run to trigger a manual scan.*",
+            ]
+            return "\n".join(lines), False, None
+
+        except Exception as exc:
+            return f"❌ IPO Watch error: {exc}", False, None
 
     if intent == "cancel":
         from stock_agent.alpaca_tools import cancel_all_orders
