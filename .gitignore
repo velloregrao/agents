@@ -29,6 +29,8 @@ build/
 # Node
 node_modules/
 lib/
+# But DO track the web UI API client (force-added with git add -f)
+!stock-copilot-web/src/lib/
 npm-debug.log*
 
 # macOS
